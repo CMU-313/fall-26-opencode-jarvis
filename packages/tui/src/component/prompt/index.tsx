@@ -1532,7 +1532,7 @@ export function Prompt(props: PromptProps) {
                       <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
                         <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>auto</text>
                       </Show>
-                      <Show when={store.mode === "normal" && !!lastUserMessage()}>
+                      <Show when={store.mode === "normal" && status().type !== "idle"}>
                         <text onMouseUp={() => local.delivery.toggle()} fg={fadeColor(theme.textMuted, agentMetaAlpha())}>
                           [
                           <span
