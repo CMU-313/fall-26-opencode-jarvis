@@ -37,7 +37,7 @@ import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { AssistantMessage, FilePart, TextPart, UserMessage } from "@opencode-ai/sdk/v2"
+import type { AssistantMessage, FilePart, UserMessage } from "@opencode-ai/sdk/v2"
 import type { DeliveryMode } from "../../context/delivery"
 import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
@@ -272,24 +272,6 @@ export function Prompt(props: PromptProps) {
     return messages.findLast((m): m is UserMessage => m.role === "user")
   })
 
-  // Prompts that arrived after the last completed assistant reply -- these
-  // haven't been answered yet, whether they're about to run or are waiting
-  // behind the current turn.
-  const pendingPrompts = createMemo(() => {
-    if (!props.sessionID) return []
-    const messages = sync.data.message[props.sessionID] ?? []
-    const lastCompleted = messages.findLastIndex((m) => m.role === "assistant" && m.time.completed)
-    return messages.filter((m, index): m is UserMessage => m.role === "user" && index > lastCompleted)
-  })
-
-  const pendingPromptText = (message: UserMessage) => {
-    const parts = sync.data.part[message.id] ?? []
-    return parts
-      .filter((part): part is TextPart => part.type === "text" && !part.synthetic)
-      .map((part) => part.text)
-      .join("\n\n")
-  }
-
   const usage = createMemo(() => {
     if (!props.sessionID) return
     const session = sync.session.get(props.sessionID)
@@ -327,32 +309,45 @@ export function Prompt(props: PromptProps) {
     interrupt: 0,
   })
 
-  // Tracks which delivery mode was active when each prompt was sent, purely
-  // for display -- the server isn't told this yet (see queue-mode-dispatch).
-  // FIFO: consumed in submission order as new pending user messages appear.
-  const pendingModeQueue: DeliveryMode[] = []
-  const [pendingModes, setPendingModes] = createStore<Record<string, DeliveryMode>>({})
+  type QueuedFollowup = {
+    id: string
+    delivery: DeliveryMode
+    text: string
+    send: () => Promise<void>
+  }
 
-  createEffect(() => {
-    for (const message of pendingPrompts()) {
-      if (pendingModes[message.id] !== undefined) continue
-      setPendingModes(message.id, pendingModeQueue.shift() ?? "steer")
-    }
-  })
+  const [queuedFollowups, setQueuedFollowups] = createStore<QueuedFollowup[]>([])
+  const [sendingQueuedFollowup, setSendingQueuedFollowup] = createSignal(false)
 
-  // The oldest pending prompt is whatever's actively running right now, not
-  // something waiting behind another turn -- drop it so a lone in-flight
-  // prompt (the common case) shows no badge at all. Steers always run ahead
-  // of queued prompts once the current turn frees up, so surface them first
-  // among whatever's left.
-  const sortedPendingPrompts = createMemo(() => {
-    const modeOf = (message: UserMessage) => pendingModes[message.id] ?? "steer"
-    const [, ...waiting] = pendingPrompts()
-    return waiting.sort((a, b) => {
-      if (modeOf(a) === modeOf(b)) return 0
-      return modeOf(a) === "steer" ? -1 : 1
-    })
-  })
+  createEffect(
+    on(
+      () => status().type,
+      (value) => {
+        if (value !== "idle") return
+        if (sendingQueuedFollowup()) return
+
+        const next = queuedFollowups[0]
+        if (!next) return
+
+        setSendingQueuedFollowup(true)
+        setQueuedFollowups((items) => items.slice(1))
+        void next
+          .send()
+          .catch((error) => {
+            setQueuedFollowups((items) => [next, ...items])
+            toast.show({
+              title: "Failed to send queued follow-up",
+              message: errorMessage(error),
+              variant: "error",
+            })
+          })
+          .finally(() => {
+            setSendingQueuedFollowup(false)
+          })
+      },
+      { defer: true },
+    ),
+  )
 
   createEffect(
     on(
@@ -443,6 +438,17 @@ export function Prompt(props: PromptProps) {
           if (content?.mime === "text/plain") {
             await pasteInputText(content.data)
           }
+        },
+      },
+      {
+        title: "Cancel latest queued follow-up",
+        name: "session.pending_prompt.cancel",
+        category: "Session",
+        hidden: true,
+        enabled: queuedFollowups.length > 0,
+        run: () => {
+          setQueuedFollowups((items) => items.slice(0, -1))
+          dialog.clear()
         },
       },
       {
@@ -630,6 +636,7 @@ export function Prompt(props: PromptProps) {
       "prompt.stash.list",
       "prompt.skills",
       "session.interrupt",
+      "session.pending_prompt.cancel",
       "workspace.set",
       "session.move",
     ]),
@@ -1147,34 +1154,44 @@ export function Prompt(props: PromptProps) {
       })
     } else {
       move.startSubmit()
-      pendingModeQueue.push(local.delivery.mode)
-      sdk.client.session
-        .prompt(
+      const request = {
+        sessionID,
+        ...selectedModel,
+        agent: agent.name,
+        model: selectedModel,
+        variant,
+        parts: [
+          ...editorParts,
           {
-            sessionID,
-            ...selectedModel,
-            agent: agent.name,
-            model: selectedModel,
-            variant,
-            parts: [
-              ...editorParts,
-              {
-                type: "text",
-                text: inputText,
-              },
-              ...nonTextParts,
-            ],
+            type: "text" as const,
+            text: inputText,
           },
-          { throwOnError: true },
-        )
-        .catch((error) => {
-          pendingModeQueue.pop()
+          ...nonTextParts,
+        ],
+      }
+      const send = async () => {
+        await sdk.client.session.prompt(request, { throwOnError: true })
+      }
+
+      if (status().type !== "idle" && local.delivery.mode === "queue") {
+        setQueuedFollowups((items) => [
+          ...items,
+          {
+            id: crypto.randomUUID(),
+            delivery: "queue",
+            text: inputText,
+            send,
+          },
+        ])
+      } else {
+        void send().catch((error) => {
           toast.show({
             title: "Failed to send prompt",
             message: errorMessage(error),
             variant: "error",
           })
         })
+      }
       if (editorParts.length > 0) editor.markSelectionSent()
     }
     history.append({
@@ -1424,25 +1441,29 @@ export function Prompt(props: PromptProps) {
             flexGrow={1}
             width="100%"
           >
-            <Show when={sortedPendingPrompts().length > 0}>
+            <Show when={queuedFollowups.length > 0}>
               <box flexDirection="column" paddingBottom={1} gap={0}>
-                <For each={sortedPendingPrompts()}>
-                  {(message) => {
-                    const mode = () => pendingModes[message.id] ?? "steer"
-                    const pillColor = () => (mode() === "queue" ? theme.warning : theme.secondary)
-                    return (
-                      <box flexDirection="row" gap={1}>
-                        <text wrapMode="none">
-                          <span style={{ bg: pillColor(), fg: selectedForeground(theme, pillColor()), bold: true }}>
-                            {pillLabel(mode() === "queue" ? "QUEUED" : "STEERING")}
-                          </span>
-                        </text>
-                        <text fg={theme.textMuted} wrapMode="none">
-                          {Locale.truncate(pendingPromptText(message), 70)}
-                        </text>
-                      </box>
-                    )
-                  }}
+                <For each={queuedFollowups}>
+                  {(item) => (
+                    <box flexDirection="row" gap={1}>
+                      <text wrapMode="none">
+                        <span style={{ bg: theme.warning, fg: selectedForeground(theme, theme.warning), bold: true }}>
+                          {pillLabel("QUEUED")}
+                        </span>
+                      </text>
+                      <text fg={theme.textMuted} wrapMode="none" flexGrow={1}>
+                        {Locale.truncate(item.text, 70)}
+                      </text>
+                      <text
+                        fg={theme.error}
+                        onMouseUp={() => {
+                          setQueuedFollowups((items) => items.filter((queued) => queued.id !== item.id))
+                        }}
+                      >
+                        Cancel
+                      </text>
+                    </box>
+                  )}
                 </For>
               </box>
             </Show>
