@@ -1279,6 +1279,9 @@ export function Session() {
                       >
                         <></>
                       </Match>
+                      <Match when={message.role === "user" && pending() !== undefined && index() > pending()!}>
+                        <></>
+                      </Match>
                       <Match when={message.role === "user"}>
                         <UserMessage
                           index={index()}
