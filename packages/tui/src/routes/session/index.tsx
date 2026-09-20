@@ -126,6 +126,7 @@ const sessionBindingCommands = [
   "session.toggle.conceal",
   "session.toggle.timestamps",
   "session.toggle.thinking",
+  "session.delivery.toggle",
   "session.toggle.actions",
   "session.toggle.scrollbar",
   "session.toggle.generic_tool_output",
@@ -702,6 +703,19 @@ export function Session() {
       },
       run: () => {
         setTimestamps((prev) => (prev === "show" ? "hide" : "show"))
+        dialog.clear()
+      },
+    },
+    {
+      title: "Toggle queue/steer",
+      value: "session.delivery.toggle",
+      category: "Session",
+      slash: {
+        name: "delivery",
+        aliases: ["toggle-delivery", "queue-mode"],
+      },
+      run: () => {
+        local.delivery.toggle()
         dialog.clear()
       },
     },
