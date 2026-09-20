@@ -126,6 +126,7 @@ const sessionBindingCommands = [
   "session.toggle.conceal",
   "session.toggle.timestamps",
   "session.toggle.thinking",
+  "session.delivery.toggle",
   "session.toggle.actions",
   "session.toggle.scrollbar",
   "session.toggle.generic_tool_output",
@@ -706,6 +707,19 @@ export function Session() {
       },
     },
     {
+      title: "Toggle queue/steer",
+      value: "session.delivery.toggle",
+      category: "Session",
+      slash: {
+        name: "delivery",
+        aliases: ["toggle-delivery", "queue-mode"],
+      },
+      run: () => {
+        local.delivery.toggle()
+        dialog.clear()
+      },
+    },
+    {
       title: (() => {
         const next = nextThinkingMode(thinkingMode())
         if (next === "hide") return "Collapse thinking"
@@ -1263,6 +1277,9 @@ export function Session() {
                       <Match
                         when={revert()?.messageID && revertMessageIndex() !== -1 && index() >= revertMessageIndex()}
                       >
+                        <></>
+                      </Match>
+                      <Match when={message.role === "user" && pending() !== undefined && index() > pending()!}>
                         <></>
                       </Match>
                       <Match when={message.role === "user"}>

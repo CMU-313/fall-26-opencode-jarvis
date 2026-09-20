@@ -9,13 +9,13 @@ import {
   type Renderable,
 } from "@opentui/core"
 import type { CommandContext } from "@opentui/keymap"
-import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
+import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match, For } from "solid-js"
 import { registerOpencodeSpinner } from "../register-spinner"
 import path from "path"
 import { fileURLToPath } from "url"
 import { useLocal } from "../../context/local"
 import { Flag } from "@opencode-ai/core/flag/flag"
-import { tint, useTheme } from "../../context/theme"
+import { selectedForeground, tint, useTheme } from "../../context/theme"
 import { EmptyBorder, SplitBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
@@ -37,7 +37,8 @@ import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { AssistantMessage, FilePart, UserMessage } from "@opencode-ai/sdk/v2"
+import type { AssistantMessage, FilePart, TextPart, UserMessage } from "@opencode-ai/sdk/v2"
+import type { DeliveryMode } from "../../context/delivery"
 import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
@@ -106,6 +107,16 @@ const DRAFT_RETENTION_MIN_CHARS = 20
 function randomIndex(count: number) {
   if (count <= 0) return 0
   return Math.floor(Math.random() * count)
+}
+
+// Centers a pill label within a fixed width so "STEERING" and "QUEUED" render
+// as equal-width blocks, keeping the prompt text after them aligned.
+const PILL_LABEL_WIDTH = 10
+
+function pillLabel(text: string) {
+  const pad = Math.max(0, PILL_LABEL_WIDTH - text.length)
+  const left = Math.floor(pad / 2)
+  return " ".repeat(left) + text + " ".repeat(pad - left)
 }
 
 function fadeColor(color: RGBA, alpha: number) {
@@ -261,6 +272,24 @@ export function Prompt(props: PromptProps) {
     return messages.findLast((m): m is UserMessage => m.role === "user")
   })
 
+  // Prompts that arrived after the last completed assistant reply -- these
+  // haven't been answered yet, whether they're about to run or are waiting
+  // behind the current turn.
+  const pendingPrompts = createMemo(() => {
+    if (!props.sessionID) return []
+    const messages = sync.data.message[props.sessionID] ?? []
+    const lastCompleted = messages.findLastIndex((m) => m.role === "assistant" && m.time.completed)
+    return messages.filter((m, index): m is UserMessage => m.role === "user" && index > lastCompleted)
+  })
+
+  const pendingPromptText = (message: UserMessage) => {
+    const parts = sync.data.part[message.id] ?? []
+    return parts
+      .filter((part): part is TextPart => part.type === "text" && !part.synthetic)
+      .map((part) => part.text)
+      .join("\n\n")
+  }
+
   const usage = createMemo(() => {
     if (!props.sessionID) return
     const session = sync.session.get(props.sessionID)
@@ -296,6 +325,33 @@ export function Prompt(props: PromptProps) {
     mode: "normal",
     extmarkToPartIndex: new Map(),
     interrupt: 0,
+  })
+
+  // Tracks which delivery mode was active when each prompt was sent, purely
+  // for display -- the server isn't told this yet (see queue-mode-dispatch).
+  // FIFO: consumed in submission order as new pending user messages appear.
+  const pendingModeQueue: DeliveryMode[] = []
+  const [pendingModes, setPendingModes] = createStore<Record<string, DeliveryMode>>({})
+
+  createEffect(() => {
+    for (const message of pendingPrompts()) {
+      if (pendingModes[message.id] !== undefined) continue
+      setPendingModes(message.id, pendingModeQueue.shift() ?? "steer")
+    }
+  })
+
+  // The oldest pending prompt is whatever's actively running right now, not
+  // something waiting behind another turn -- drop it so a lone in-flight
+  // prompt (the common case) shows no badge at all. Steers always run ahead
+  // of queued prompts once the current turn frees up, so surface them first
+  // among whatever's left.
+  const sortedPendingPrompts = createMemo(() => {
+    const modeOf = (message: UserMessage) => pendingModes[message.id] ?? "steer"
+    const [, ...waiting] = pendingPrompts()
+    return waiting.sort((a, b) => {
+      if (modeOf(a) === modeOf(b)) return 0
+      return modeOf(a) === "steer" ? -1 : 1
+    })
   })
 
   createEffect(
@@ -1091,6 +1147,7 @@ export function Prompt(props: PromptProps) {
       })
     } else {
       move.startSubmit()
+      pendingModeQueue.push(local.delivery.mode)
       sdk.client.session
         .prompt(
           {
@@ -1111,6 +1168,7 @@ export function Prompt(props: PromptProps) {
           { throwOnError: true },
         )
         .catch((error) => {
+          pendingModeQueue.pop()
           toast.show({
             title: "Failed to send prompt",
             message: errorMessage(error),
@@ -1366,6 +1424,28 @@ export function Prompt(props: PromptProps) {
             flexGrow={1}
             width="100%"
           >
+            <Show when={sortedPendingPrompts().length > 0}>
+              <box flexDirection="column" paddingBottom={1} gap={0}>
+                <For each={sortedPendingPrompts()}>
+                  {(message) => {
+                    const mode = () => pendingModes[message.id] ?? "steer"
+                    const pillColor = () => (mode() === "queue" ? theme.warning : theme.secondary)
+                    return (
+                      <box flexDirection="row" gap={1}>
+                        <text wrapMode="none">
+                          <span style={{ bg: pillColor(), fg: selectedForeground(theme, pillColor()), bold: true }}>
+                            {pillLabel(mode() === "queue" ? "QUEUED" : "STEERING")}
+                          </span>
+                        </text>
+                        <text fg={theme.textMuted} wrapMode="none">
+                          {Locale.truncate(pendingPromptText(message), 70)}
+                        </text>
+                      </box>
+                    )
+                  }}
+                </For>
+              </box>
+            </Show>
             <textarea
               width="100%"
               placeholder={placeholderText()}
@@ -1451,6 +1531,35 @@ export function Prompt(props: PromptProps) {
                       </text>
                       <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
                         <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>auto</text>
+                      </Show>
+                      <Show when={store.mode === "normal" && !!lastUserMessage()}>
+                        <text onMouseUp={() => local.delivery.toggle()} fg={fadeColor(theme.textMuted, agentMetaAlpha())}>
+                          [
+                          <span
+                            style={{
+                              fg: fadeColor(
+                                local.delivery.mode === "steer" ? theme.text : theme.textMuted,
+                                agentMetaAlpha(),
+                              ),
+                              bold: local.delivery.mode === "steer",
+                            }}
+                          >
+                            steer
+                          </span>
+                          |
+                          <span
+                            style={{
+                              fg: fadeColor(
+                                local.delivery.mode === "queue" ? theme.warning : theme.textMuted,
+                                agentMetaAlpha(),
+                              ),
+                              bold: local.delivery.mode === "queue",
+                            }}
+                          >
+                            queue
+                          </span>
+                          ]
+                        </text>
                       </Show>
                       <Show when={store.mode === "normal"}>
                         <box flexDirection="row" gap={1}>
