@@ -242,14 +242,6 @@ export function Session() {
   const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
 
-  const pending = createMemo(() => {
-    const completed = messages().findLastIndex((message) => message.role === "assistant" && message.time.completed)
-    const pending = messages().findLastIndex(
-      (message, index) => index > completed && message.role === "assistant" && !message.time.completed,
-    )
-    return pending === -1 ? undefined : pending
-  })
-
   const lastAssistant = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant")
   })
@@ -1279,9 +1271,6 @@ export function Session() {
                       >
                         <></>
                       </Match>
-                      <Match when={message.role === "user" && pending() !== undefined && index() > pending()!}>
-                        <></>
-                      </Match>
                       <Match when={message.role === "user"}>
                         <UserMessage
                           index={index()}
@@ -1297,7 +1286,6 @@ export function Session() {
                           }}
                           message={message as UserMessage}
                           parts={sync.data.part[message.id] ?? []}
-                          pending={pending()}
                         />
                       </Match>
                       <Match when={message.role === "assistant"}>
