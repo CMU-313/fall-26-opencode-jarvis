@@ -39,6 +39,7 @@ import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { AssistantMessage, FilePart, UserMessage } from "@opencode-ai/sdk/v2"
 import type { DeliveryMode } from "../../context/delivery"
+import { cancelQueuedFollowup, nextQueuedFollowup, shouldQueueFollowup } from "../../prompt/followup-queue"
 import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
@@ -60,7 +61,6 @@ import { readLocalAttachment } from "./local-attachment"
 import { useLocation } from "../../context/location"
 
 registerOpencodeSpinner()
-
 export type PromptProps = {
   sessionID?: string
   visible?: boolean
@@ -326,7 +326,7 @@ export function Prompt(props: PromptProps) {
         if (value !== "idle") return
         if (sendingQueuedFollowup()) return
 
-        const next = queuedFollowups[0]
+        const next = nextQueuedFollowup(value, sendingQueuedFollowup(), queuedFollowups)
         if (!next) return
 
         setSendingQueuedFollowup(true)
@@ -447,7 +447,7 @@ export function Prompt(props: PromptProps) {
         hidden: true,
         enabled: queuedFollowups.length > 0,
         run: () => {
-          setQueuedFollowups((items) => items.slice(0, -1))
+          setQueuedFollowups((items) => cancelQueuedFollowup(items, items.at(-1)?.id ?? ""))
           dialog.clear()
         },
       },
@@ -1173,7 +1173,7 @@ export function Prompt(props: PromptProps) {
         await sdk.client.session.prompt(request, { throwOnError: true })
       }
 
-      if (status().type !== "idle" && local.delivery.mode === "queue") {
+      if (shouldQueueFollowup(status().type, local.delivery.mode)) {
         setQueuedFollowups((items) => [
           ...items,
           {
@@ -1457,7 +1457,7 @@ export function Prompt(props: PromptProps) {
                       <text
                         fg={theme.error}
                         onMouseUp={() => {
-                          setQueuedFollowups((items) => items.filter((queued) => queued.id !== item.id))
+                          setQueuedFollowups((items) => cancelQueuedFollowup(items, item.id))
                         }}
                       >
                         Cancel
