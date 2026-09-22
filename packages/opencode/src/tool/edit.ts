@@ -17,6 +17,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { ChangeContext } from "@opencode-ai/core/change-context"
 import * as Bom from "@/util/bom"
 
 function normalizeLineEndings(text: string): string {
@@ -106,6 +107,7 @@ export const EditTool = Tool.define(
                   metadata: {
                     filepath: filePath,
                     diff,
+                    filediff: ChangeContext.extract(filePath, undefined, contentNew),
                   },
                 })
                 yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
@@ -149,6 +151,7 @@ export const EditTool = Tool.define(
                 metadata: {
                   filepath: filePath,
                   diff,
+                  filediff: ChangeContext.extract(filePath, contentOld, contentNew),
                 },
               })
 
