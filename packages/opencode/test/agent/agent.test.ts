@@ -125,6 +125,21 @@ it.instance("learn agent is a visible primary agent that denies edits", () =>
   }),
 )
 
+it.instance("learn agent hides the edit tools from the model", () =>
+  Effect.gen(function* () {
+    const learn = yield* load((svc) => svc.get("learn"))
+    const disabled = Permission.disabled(["edit", "write", "apply_patch", "read", "grep", "bash"], learn!.permission)
+    expect(disabled.has("edit")).toBe(true)
+    expect(disabled.has("write")).toBe(true)
+    expect(disabled.has("apply_patch")).toBe(true)
+    expect(disabled.has("read")).toBe(false)
+    expect(disabled.has("grep")).toBe(false)
+    // bash stays available on purpose - running tests and git is part of learning.
+    // The read-only constraint on it is carried by the learn reminder prompt.
+    expect(disabled.has("bash")).toBe(false)
+  }),
+)
+
 it.instance(
   "learn agent disable removes it from list",
   () =>
