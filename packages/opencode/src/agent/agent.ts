@@ -179,6 +179,23 @@ const layer = Layer.effect(
             mode: "primary",
             native: true,
           },
+          learn: {
+            name: "learn",
+            description: "Learn mode. Only accept responses from the model, if the user answers comprehension questions correctly. (feature not built yet)",
+            options: {},
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                question: "allow",
+                edit: {
+                  "*": "deny",
+                },
+              }),
+              user,
+            ),
+            mode: "primary",
+            native: true,
+          },
           general: {
             name: "general",
             description: `General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.`,

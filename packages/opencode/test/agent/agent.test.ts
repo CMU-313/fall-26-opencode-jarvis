@@ -50,6 +50,7 @@ it.instance("returns default native agents when no config", () =>
     const names = agents.map((a) => a.name)
     expect(names).toContain("build")
     expect(names).toContain("plan")
+    expect(names).toContain("learn")
     expect(names).toContain("general")
     expect(names).toContain("explore")
     expect(names).toContain("compaction")
@@ -105,6 +106,68 @@ it.instance(
           general: "allow",
         },
       },
+    },
+  },
+)
+
+it.instance("learn agent is a visible primary agent that denies edits", () =>
+  Effect.gen(function* () {
+    const learn = yield* load((svc) => svc.get("learn"))
+    expect(learn).toBeDefined()
+    expect(learn?.mode).toBe("primary")
+    expect(learn?.native).toBe(true)
+    expect(learn?.hidden).not.toBe(true)
+    expect(evalPerm(learn, "edit")).toBe("deny")
+    // Unlike plan, no carve-out for plan files
+    expect(Permission.evaluate("edit", ".opencode/plans/foo.md", learn!.permission).action).toBe("deny")
+    expect(evalPerm(learn, "question")).toBe("allow")
+    expect(evalPerm(learn, "read")).toBe("allow")
+  }),
+)
+
+it.instance("learn agent hides the edit tools from the model", () =>
+  Effect.gen(function* () {
+    const learn = yield* load((svc) => svc.get("learn"))
+    const disabled = Permission.disabled(["edit", "write", "apply_patch", "read", "grep", "bash"], learn!.permission)
+    expect(disabled.has("edit")).toBe(true)
+    expect(disabled.has("write")).toBe(true)
+    expect(disabled.has("apply_patch")).toBe(true)
+    expect(disabled.has("read")).toBe(false)
+    expect(disabled.has("grep")).toBe(false)
+    // bash stays available on purpose - running tests and git is part of learning.
+    // The read-only constraint on it is carried by the learn reminder prompt.
+    expect(disabled.has("bash")).toBe(false)
+  }),
+)
+
+it.instance(
+  "learn agent disable removes it from list",
+  () =>
+    Effect.gen(function* () {
+      const learn = yield* load((svc) => svc.get("learn"))
+      expect(learn).toBeUndefined()
+      const agents = yield* load((svc) => svc.list())
+      expect(agents.map((a) => a.name)).not.toContain("learn")
+    }),
+  {
+    config: {
+      agent: {
+        learn: { disable: true },
+      },
+    },
+  },
+)
+
+it.instance(
+  "default_agent can be set to learn",
+  () =>
+    Effect.gen(function* () {
+      const agent = yield* load((svc) => svc.defaultAgent())
+      expect(agent).toBe("learn")
+    }),
+  {
+    config: {
+      default_agent: "learn",
     },
   },
 )
@@ -749,6 +812,7 @@ it.instance(
       agent: {
         build: { disable: true },
         plan: { disable: true },
+        learn: { disable: true },
       },
     },
   },
