@@ -125,6 +125,14 @@ it.instance("learn agent is a visible primary agent that denies edits", () =>
   }),
 )
 
+// Pinned rather than positional so adding an agent above learn cannot recolor it.
+it.instance("learn agent is green", () =>
+  Effect.gen(function* () {
+    const learn = yield* load((svc) => svc.get("learn"))
+    expect(learn?.color).toBe("success")
+  }),
+)
+
 it.instance("learn agent hides the edit tools from the model", () =>
   Effect.gen(function* () {
     const learn = yield* load((svc) => svc.get("learn"))

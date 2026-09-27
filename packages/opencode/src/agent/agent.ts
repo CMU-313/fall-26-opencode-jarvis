@@ -182,6 +182,9 @@ const layer = Layer.effect(
           learn: {
             name: "learn",
             description: "Learn mode. Only accept responses from the model, if the user answers comprehension questions correctly. (feature not built yet)",
+            // Pinned green. The positional fallback in the TUI would otherwise land
+            // learn on theme.warning, which reads as yellow.
+            color: "success",
             options: {},
             permission: Permission.merge(
               defaults,
