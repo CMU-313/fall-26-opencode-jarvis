@@ -160,7 +160,7 @@ describe("ComprehensionHandoff", () => {
     }),
   )
 
-  it.instance("gate fails with feedback when comprehension fails", () =>
+  it.instance("gate shows feedback and asks another question after comprehension fails", () =>
     Effect.gen(function* () {
       const instance = yield* TestInstance
       const file = `${instance.directory}/limit.txt`
@@ -173,40 +173,63 @@ describe("ComprehensionHandoff", () => {
       }
       const questions = yield* Question.Service
       const events = yield* EventV2Bridge.Service
-      const published = yield* Deferred.make<Question.Request>()
+      const firstPublished = yield* Deferred.make<Question.Request>()
+      const secondPublished = yield* Deferred.make<Question.Request>()
+      let published = 0
       const off = yield* events.listen((event) => {
-        if (event.type === Question.Event.Asked.type)
-          return Deferred.succeed(published, Schema.decodeUnknownSync(Question.Request)(event.data)).pipe(Effect.asVoid)
+        if (event.type === Question.Event.Asked.type) {
+          const request = Schema.decodeUnknownSync(Question.Request)(event.data)
+          published++
+          return Deferred.succeed(published === 1 ? firstPublished : secondPublished, request).pipe(Effect.asVoid)
+        }
         return Effect.void
       })
       yield* Effect.addFinalizer(() => off)
 
       let calls = 0
-      const evaluation = { passed: false, feedback: "This does not explain the behavior change." }
+      const failed = { passed: false, feedback: "This should mention that equality is now included." }
+      const passed = { passed: true, feedback: "The response explains the behavior change." }
       const fiber = yield* ComprehensionHandoff.gate({ pending, model }).pipe(
         Effect.provide(
           Layer.mock(LLM.Service, {
             stream: () => {
               calls++
-              if (calls === 1) return Stream.make(LLMEvent.textDelta({ id: "question", text }))
-              return Stream.make(LLMEvent.textDelta({ id: "evaluation", text: JSON.stringify(evaluation) }))
+              if (calls === 1) return Stream.make(LLMEvent.textDelta({ id: "question-1", text }))
+              if (calls === 2) return Stream.make(LLMEvent.textDelta({ id: "evaluation-1", text: JSON.stringify(failed) }))
+              if (calls === 3) return Stream.make(LLMEvent.textDelta({ id: "question-2", text }))
+              return Stream.make(LLMEvent.textDelta({ id: "evaluation-2", text: JSON.stringify(passed) }))
             },
           }),
         ),
         Effect.forkScoped,
       )
 
-      const request = yield* Deferred.await(published)
-      yield* questions.reply({ requestID: request.id, answers: [["I don't know."]] })
+      const first = yield* Deferred.await(firstPublished)
+      expect(first.questions).toEqual([
+        { question: text, header: "Comprehension", options: [], custom: true, multiple: false },
+      ])
+      yield* questions.reply({ requestID: first.id, answers: [["I don't know."]] })
 
-      const exit = yield* Fiber.await(fiber)
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) {
-        const error = Cause.squash(exit.cause)
-        expect(error).toBeInstanceOf(ComprehensionHandoff.CheckFailed)
-        if (error instanceof ComprehensionHandoff.CheckFailed) expect(error.feedback).toBe(evaluation.feedback)
-      }
-      expect(calls).toBe(2)
+      const second = yield* Deferred.await(secondPublished)
+      expect(second.questions).toEqual([
+        {
+          question: `Previous answer did not pass: ${failed.feedback}\n\n${text}`,
+          header: "Comprehension",
+          options: [],
+          custom: true,
+          multiple: false,
+        },
+      ])
+      expect(yield* Effect.promise(() => Bun.file(file).text())).toBe(original)
+      yield* questions.reply({ requestID: second.id, answers: [["Equality now returns true."]] })
+
+      expect(yield* Fiber.join(fiber)).toEqual({
+        pending,
+        question: text,
+        answers: [["Equality now returns true."]],
+        evaluation: passed,
+      })
+      expect(calls).toBe(4)
       expect(yield* questions.list()).toEqual([])
       expect(yield* Effect.promise(() => Bun.file(file).text())).toBe(original)
     }),
