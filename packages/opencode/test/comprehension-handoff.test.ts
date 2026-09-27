@@ -160,6 +160,58 @@ describe("ComprehensionHandoff", () => {
     }),
   )
 
+  it.instance("gate fails with feedback when comprehension fails", () =>
+    Effect.gen(function* () {
+      const instance = yield* TestInstance
+      const file = `${instance.directory}/limit.txt`
+      const original = "return count > limit\n"
+      yield* Effect.promise(() => Bun.write(file, original))
+      const pending: ComprehensionHandoff.PendingChange = {
+        sessionID: SessionID.make("ses_comprehension_gate_fail"),
+        tool: { messageID: MessageID.make("msg_change_gate_fail"), callID: "call_edit_gate_fail" },
+        context: ChangeContext.extract(file, original, "return count >= limit\n"),
+      }
+      const questions = yield* Question.Service
+      const events = yield* EventV2Bridge.Service
+      const published = yield* Deferred.make<Question.Request>()
+      const off = yield* events.listen((event) => {
+        if (event.type === Question.Event.Asked.type)
+          return Deferred.succeed(published, Schema.decodeUnknownSync(Question.Request)(event.data)).pipe(Effect.asVoid)
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => off)
+
+      let calls = 0
+      const evaluation = { passed: false, feedback: "This does not explain the behavior change." }
+      const fiber = yield* ComprehensionHandoff.gate({ pending, model }).pipe(
+        Effect.provide(
+          Layer.mock(LLM.Service, {
+            stream: () => {
+              calls++
+              if (calls === 1) return Stream.make(LLMEvent.textDelta({ id: "question", text }))
+              return Stream.make(LLMEvent.textDelta({ id: "evaluation", text: JSON.stringify(evaluation) }))
+            },
+          }),
+        ),
+        Effect.forkScoped,
+      )
+
+      const request = yield* Deferred.await(published)
+      yield* questions.reply({ requestID: request.id, answers: [["I don't know."]] })
+
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        const error = Cause.squash(exit.cause)
+        expect(error).toBeInstanceOf(ComprehensionHandoff.CheckFailed)
+        if (error instanceof ComprehensionHandoff.CheckFailed) expect(error.feedback).toBe(evaluation.feedback)
+      }
+      expect(calls).toBe(2)
+      expect(yield* questions.list()).toEqual([])
+      expect(yield* Effect.promise(() => Bun.file(file).text())).toBe(original)
+    }),
+  )
+
   it.instance("does not publish a question when generation fails", () =>
     Effect.gen(function* () {
       const questions = yield* Question.Service

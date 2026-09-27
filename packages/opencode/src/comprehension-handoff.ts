@@ -1,5 +1,5 @@
 import { ChangeContext } from "@opencode-ai/core/change-context"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { ComprehensionEvaluation } from "./comprehension-evaluation"
 import { ComprehensionQuestion } from "./comprehension-question"
 import { Provider } from "./provider/provider"
@@ -22,6 +22,14 @@ export interface Submission {
 
 export interface EvaluatedSubmission extends Submission {
   readonly evaluation: ComprehensionEvaluation.Result
+}
+
+export class CheckFailed extends Schema.TaggedErrorClass<CheckFailed>()("ComprehensionHandoff.CheckFailed", {
+  feedback: Schema.String,
+}) {
+  override get message() {
+    return `Comprehension check failed: ${this.feedback}`
+  }
 }
 
 export const present = Effect.fn("ComprehensionHandoff.present")(function* (input: {
@@ -56,6 +64,21 @@ export const presentAndEvaluate = Effect.fn("ComprehensionHandoff.presentAndEval
     response,
   })
   return { ...submission, evaluation } satisfies EvaluatedSubmission
+})
+
+export const gate = Effect.fn("ComprehensionHandoff.gate")(function* (input: {
+  pending: PendingChange
+  model: Provider.Model
+}) {
+  const submission = yield* presentAndEvaluate(input)
+
+  if (!submission.evaluation.passed) {
+    return yield* new CheckFailed({
+      feedback: submission.evaluation.feedback,
+    })
+  }
+
+  return submission
 })
 
 export * as ComprehensionHandoff from "./comprehension-handoff"
