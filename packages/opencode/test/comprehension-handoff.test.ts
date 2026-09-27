@@ -81,6 +81,85 @@ describe("ComprehensionHandoff", () => {
     )
   })
 
+  it.instance("evaluates the answer while leaving the pending edit unapplied", () =>
+    Effect.gen(function* () {
+      const instance = yield* TestInstance
+      const file = `${instance.directory}/limit.txt`
+      const original = "return count > limit\n"
+      yield* Effect.promise(() => Bun.write(file, original))
+      const pending: ComprehensionHandoff.PendingChange = {
+        sessionID: SessionID.make("ses_comprehension_eval"),
+        tool: { messageID: MessageID.make("msg_change_eval"), callID: "call_edit_eval" },
+        context: ChangeContext.extract(file, original, "return count >= limit\n"),
+      }
+      const questions = yield* Question.Service
+      const events = yield* EventV2Bridge.Service
+      const published = yield* Deferred.make<Question.Request>()
+      const evaluating = yield* Deferred.make<void>()
+      const releaseEvaluation = yield* Deferred.make<void>()
+      const off = yield* events.listen((event) => {
+        if (event.type === Question.Event.Asked.type)
+          return Deferred.succeed(published, Schema.decodeUnknownSync(Question.Request)(event.data)).pipe(Effect.asVoid)
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => off)
+
+      let calls = 0
+      const evaluation = {
+        passed: true,
+        feedback: "The response explains that equality is now included.",
+      }
+      const fiber = yield* ComprehensionHandoff.presentAndEvaluate({ pending, model }).pipe(
+        Effect.provide(
+          Layer.mock(LLM.Service, {
+            stream: (request) => {
+              calls++
+              if (calls === 1) return Stream.make(LLMEvent.textDelta({ id: "question", text }))
+
+              expect(request.messages).toEqual([
+                {
+                  role: "user",
+                  content: JSON.stringify({
+                    file: pending.context.file,
+                    patch: pending.context.patch,
+                    question: text,
+                    response: "Equality now returns true.",
+                  }),
+                },
+              ])
+
+              return Stream.unwrap(
+                Effect.gen(function* () {
+                  yield* Deferred.succeed(evaluating, undefined)
+                  yield* Deferred.await(releaseEvaluation)
+                  return Stream.make(LLMEvent.textDelta({ id: "evaluation", text: JSON.stringify(evaluation) }))
+                }),
+              )
+            },
+          }),
+        ),
+        Effect.forkScoped,
+      )
+
+      const request = yield* Deferred.await(published)
+      yield* questions.reply({ requestID: request.id, answers: [["Equality now returns true."]] })
+
+      yield* Deferred.await(evaluating)
+      expect(yield* Effect.promise(() => Bun.file(file).text())).toBe(original)
+
+      yield* Deferred.succeed(releaseEvaluation, undefined)
+      expect(yield* Fiber.join(fiber)).toEqual({
+        pending,
+        question: text,
+        answers: [["Equality now returns true."]],
+        evaluation,
+      })
+      expect(calls).toBe(2)
+      expect(yield* questions.list()).toEqual([])
+      expect(yield* Effect.promise(() => Bun.file(file).text())).toBe(original)
+    }),
+  )
+
   it.instance("does not publish a question when generation fails", () =>
     Effect.gen(function* () {
       const questions = yield* Question.Service
