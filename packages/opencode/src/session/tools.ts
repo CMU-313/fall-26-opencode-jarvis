@@ -114,7 +114,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       }),
     ask: (req) =>
       Effect.gen(function* () {
-        yield* gateComprehension(req, options)
+        yield* run.run(gateComprehension(req, options))
         yield* permission.ask({
           ...req,
           sessionID: input.session.id,
