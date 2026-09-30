@@ -4,7 +4,7 @@ import { ChangeContext } from "@opencode-ai/core/change-context"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { LLMEvent } from "@opencode-ai/llm"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
-import { Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import { Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { Agent } from "@/agent/agent"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { LLM } from "@/session/llm"
@@ -59,18 +59,23 @@ function processor() {
   }
 }
 
-function llmEvaluation(passed: boolean) {
+function llmEvaluations(results: ReadonlyArray<boolean>) {
   let calls = 0
+  let evaluations = 0
   return Layer.mock(LLM.Service, {
     stream: () => {
       calls++
-      if (calls === 1) return Stream.make(LLMEvent.textDelta({ id: "question", text: question }))
+      if (calls % 2 === 1) return Stream.make(LLMEvent.textDelta({ id: `question-${calls}`, text: question }))
+      const passed = results[Math.min(evaluations, results.length - 1)] ?? false
+      evaluations++
       return Stream.make(
         LLMEvent.textDelta({
-          id: "evaluation",
+          id: `evaluation-${calls}`,
           text: JSON.stringify({
             passed,
-            feedback: passed ? "The answer explains the behavior change." : "The answer is too vague.",
+            feedback: passed
+              ? "The answer explains the behavior change."
+              : "A sufficient answer should mention that equality is now included.",
           }),
         }),
       )
@@ -149,7 +154,7 @@ function runFakeEdit(input: { learnMode: boolean; afterAsk: () => void }) {
   }).pipe(Effect.provide(toolRegistryLayer(input.afterAsk)))
 }
 
-function answerQuestion() {
+function waitForQuestion() {
   return Effect.gen(function* () {
     const questions = yield* Question.Service
     let request: Question.Request | undefined
@@ -157,7 +162,16 @@ function answerQuestion() {
       request = (yield* questions.list())[0]
       if (!request) yield* Effect.sleep("1 millis")
     }
-    yield* questions.reply({ requestID: request.id, answers: [[answer]] })
+    return request
+  })
+}
+
+function answerQuestion(response = answer) {
+  return Effect.gen(function* () {
+    const questions = yield* Question.Service
+    const request = yield* waitForQuestion()
+    yield* questions.reply({ requestID: request.id, answers: [[response]] })
+    return request
   })
 }
 
@@ -172,7 +186,7 @@ describe("SessionTools comprehension gate", () => {
         afterAsk: () => {
           continued = true
         },
-      }).pipe(Effect.provide(permissionLayer(permissionRequests)), Effect.provide(llmEvaluation(true)), Effect.forkScoped)
+      }).pipe(Effect.provide(permissionLayer(permissionRequests)), Effect.provide(llmEvaluations([true])), Effect.forkScoped)
 
       yield* answerQuestion()
 
@@ -182,7 +196,7 @@ describe("SessionTools comprehension gate", () => {
     }),
   )
 
-  it.instance("stops before downstream permission when LearnMode comprehension fails", () =>
+  it.instance("waits for passing comprehension before downstream permission", () =>
     Effect.gen(function* () {
       const permissionRequests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
       let continued = false
@@ -192,14 +206,24 @@ describe("SessionTools comprehension gate", () => {
         afterAsk: () => {
           continued = true
         },
-      }).pipe(Effect.provide(permissionLayer(permissionRequests)), Effect.provide(llmEvaluation(false)), Effect.forkScoped)
+      }).pipe(
+        Effect.provide(permissionLayer(permissionRequests)),
+        Effect.provide(llmEvaluations([false, true])),
+        Effect.forkScoped,
+      )
 
-      yield* answerQuestion()
-
-      const exit = yield* Fiber.await(fiber)
-      expect(Exit.isFailure(exit)).toBe(true)
+      yield* answerQuestion("I don't know.")
+      const retry = yield* waitForQuestion()
+      expect(retry.questions[0]?.question).toContain("Previous answer did not pass")
       expect(permissionRequests).toEqual([])
       expect(continued).toBe(false)
+
+      const questions = yield* Question.Service
+      yield* questions.reply({ requestID: retry.id, answers: [[answer]] })
+
+      expect(yield* Fiber.join(fiber)).toMatchObject({ output: "edit continued" })
+      expect(permissionRequests.map((request) => request.permission)).toEqual(["edit"])
+      expect(continued).toBe(true)
     }),
   )
 

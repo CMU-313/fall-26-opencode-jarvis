@@ -81,13 +81,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         context,
       },
       model: input.model,
-    }).pipe(
-      Effect.mapError((error) =>
-        error instanceof ComprehensionHandoff.CheckFailed
-          ? new PermissionV1.CorrectedError({ feedback: error.feedback })
-          : error,
-      ),
-    )
+    })
   })
 
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
