@@ -1,5 +1,6 @@
 import { ChangeContext } from "@opencode-ai/core/change-context"
 import { Effect } from "effect"
+import { ComprehensionEvaluation } from "./comprehension-evaluation"
 import { ComprehensionQuestion } from "./comprehension-question"
 import { Provider } from "./provider/provider"
 import { Question } from "./question"
@@ -19,6 +20,10 @@ export interface Submission {
   readonly answers: ReadonlyArray<Question.Answer>
 }
 
+export interface EvaluatedSubmission extends Submission {
+  readonly evaluation: ComprehensionEvaluation.Result
+}
+
 export const present = Effect.fn("ComprehensionHandoff.present")(function* (input: {
   pending: PendingChange
   model: Provider.Model
@@ -35,6 +40,22 @@ export const present = Effect.fn("ComprehensionHandoff.present")(function* (inpu
     questions: [{ question, header: "Comprehension", options: [], custom: true, multiple: false }],
   })
   return { pending: input.pending, question, answers } satisfies Submission
+})
+
+export const presentAndEvaluate = Effect.fn("ComprehensionHandoff.presentAndEvaluate")(function* (input: {
+  pending: PendingChange
+  model: Provider.Model
+}) {
+  const submission = yield* present(input)
+  const response = submission.answers[0]?.join("\n") ?? ""
+  const evaluation = yield* ComprehensionEvaluation.evaluate({
+    context: submission.pending.context,
+    sessionID: submission.pending.sessionID,
+    model: input.model,
+    question: submission.question,
+    response,
+  })
+  return { ...submission, evaluation } satisfies EvaluatedSubmission
 })
 
 export * as ComprehensionHandoff from "./comprehension-handoff"
