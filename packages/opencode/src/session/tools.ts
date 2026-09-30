@@ -1,4 +1,6 @@
 import { Agent } from "@/agent/agent"
+import { ComprehensionHandoff } from "@/comprehension-handoff"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
@@ -9,11 +11,12 @@ import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
+import { FileDiff } from "@opencode-ai/schema/file-diff"
 
 import { Plugin } from "@/plugin"
 import type { TaskPromptOps } from "@/tool/task"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import { SessionProcessor } from "./processor"
@@ -56,6 +59,31 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const truncate = yield* Truncate.Service
   const flags = yield* RuntimeFlags.Service
 
+  const decodeFileDiff = Schema.decodeUnknownEffect(FileDiff.Info)
+
+  const gateComprehension = Effect.fn("SessionTools.gateComprehension")(function* (
+    req: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">,
+    options: ToolExecutionOptions,
+  ) {
+    if (input.agent.options.learnMode !== true) return
+    if (req.permission !== "edit") return
+
+    const failed = new PermissionV1.CorrectedError({
+      feedback: "Unable to run the comprehension check for this edit.",
+    })
+    if (!isRecord(req.metadata)) return yield* failed
+
+    const context = yield* decodeFileDiff(req.metadata.filediff).pipe(Effect.mapError(() => failed))
+    yield* ComprehensionHandoff.gate({
+      pending: {
+        sessionID: input.session.id,
+        tool: { messageID: input.processor.message.id, callID: options.toolCallId },
+        context,
+      },
+      model: input.model,
+    })
+  })
+
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
     abort: options.abortSignal!,
@@ -79,14 +107,15 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         }
       }),
     ask: (req) =>
-      permission
-        .ask({
+      Effect.gen(function* () {
+        yield* run.run(gateComprehension(req, options))
+        yield* permission.ask({
           ...req,
           sessionID: input.session.id,
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
           ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
         })
-        .pipe(Effect.orDie),
+      }).pipe(Effect.orDie),
   })
 
   for (const item of yield* registry.tools({

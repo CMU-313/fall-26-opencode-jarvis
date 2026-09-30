@@ -1,6 +1,9 @@
+import { InstanceState } from "@/effect/instance-state"
+import { FileDiff } from "@opencode-ai/schema/file-diff"
+import { applyPatch, parsePatch } from "diff"
 import { afterEach, describe, expect } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Effect, Layer } from "effect"
+import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import path from "path"
 import fs from "fs/promises"
 import { WriteTool } from "../../src/tool/write"
@@ -59,6 +62,87 @@ const run = Effect.fn("WriteToolTest.run")(function* (
 })
 
 describe("tool.write", () => {
+  describe("proposed change context", () => {
+    const cases = [
+      { name: "new file", original: undefined, proposed: "new content\n" },
+      { name: "replacement", original: "before\nold\nafter\n", proposed: "before\nnew\nafter\n" },
+      { name: "addition", original: "before\nafter\n", proposed: "before\nadded\nafter\n" },
+      { name: "deletion", original: "before\nremoved\nafter\n", proposed: "before\nafter\n" },
+      {
+        name: "separated regions",
+        original: "old\n" + "unchanged\n".repeat(20) + "old\n",
+        proposed: "new\n" + "unchanged\n".repeat(20) + "new\n",
+      },
+    ]
+
+    cases.forEach(({ name, original, proposed }) => {
+      it.instance(`exposes ${name} context before approval and writing`, () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const filepath = path.join(test.directory, "context.txt")
+          if (original !== undefined) yield* Effect.promise(() => Bun.write(filepath, original))
+          const requests: string[] = []
+          yield* run(
+            { filePath: filepath, content: proposed },
+            {
+              ...ctx,
+              ask: (request) =>
+                Effect.gen(function* () {
+                  requests.push(request.permission)
+                  const instance = yield* InstanceState.context
+                  expect(request.patterns).toEqual([path.relative(instance.worktree, filepath)])
+                  expect(request.always).toEqual(["*"])
+                  expect(request.metadata.filepath).toBe(filepath)
+                  expect(typeof request.metadata.diff).toBe("string")
+                  const context = Schema.decodeUnknownSync(FileDiff.Info)(request.metadata.filediff)
+                  expect(context.file).toBe(filepath)
+                  expect(context.status).toBe(original === undefined ? "added" : "modified")
+                  expect(applyPatch(original ?? "", context.patch!)).toBe(proposed)
+                  if (name === "separated regions") expect(parsePatch(context.patch!)[0].hunks).toHaveLength(2)
+                  if (original === undefined) {
+                    expect(yield* Effect.promise(() => Bun.file(filepath).exists())).toBe(false)
+                    return
+                  }
+                  expect(yield* Effect.promise(() => Bun.file(filepath).text())).toBe(original)
+                }),
+            },
+          )
+          expect(requests).toEqual(["edit"])
+          expect(yield* Effect.promise(() => Bun.file(filepath).text())).toBe(proposed)
+        }),
+      )
+
+      it.instance(`leaves ${name} unchanged when approval is rejected`, () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const filepath = path.join(test.directory, "context.txt")
+          if (original !== undefined) yield* Effect.promise(() => Bun.write(filepath, original))
+          const requests: string[] = []
+          const exit = yield* run(
+            { filePath: filepath, content: proposed },
+            {
+              ...ctx,
+              ask: (request) =>
+                Effect.gen(function* () {
+                  requests.push(request.permission)
+                  expect(request.metadata.filediff).toBeDefined()
+                  return yield* Effect.die(new Error("Rejected by student"))
+                }),
+            },
+          ).pipe(Effect.exit)
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toEqual(new Error("Rejected by student"))
+          expect(requests).toEqual(["edit"])
+          if (original === undefined) {
+            expect(yield* Effect.promise(() => Bun.file(filepath).exists())).toBe(false)
+            return
+          }
+          expect(yield* Effect.promise(() => Bun.file(filepath).text())).toBe(original)
+        }),
+      )
+    })
+  })
+
   describe("new file creation", () => {
     it.instance("writes content to new file", () =>
       Effect.gen(function* () {
