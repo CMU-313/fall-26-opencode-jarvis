@@ -1,0 +1,7 @@
+# Cancel queued follow-up prompts (Alice)
+
+While an agent is working, switch delivery mode to **queue** and send a follow-up. It appears above the composer until processed. Click **Cancel** to remove that item, or press `<leader>d` to cancel the newest queued item (`<leader>` defaults to `ctrl+x`). **Steer** follow-ups still send immediately and before queued items. When the session becomes idle, the next queued follow-up is sent.
+
+**Manual check:** Run `bun dev`. Send a prompt that takes time to process, switch to queue mode, and send one or more follow-ups. Cancel any item with the mouse and cancel the newest with `<leader>d`. Send a steer follow-up to confirm it sends immediately. When the current response finishes, confirm the oldest remaining queued prompt is processed.
+
+**Automated checks:** From `packages/tui`, run `bun test test/prompt/followup-queue.test.ts`. Tests live in [`packages/tui/test/prompt/followup-queue.test.ts`](packages/tui/test/prompt/followup-queue.test.ts) and cover queue/steer selection, idle-only FIFO dispatch, concurrent-dispatch prevention, and cancellation. They cover the queue decisions used by the TUI without starting an OpenCode process. These tests sufficiently cover the queue and cancellation decision helpers used by the TUI; the manual check verifies their integration with composer input, keyboard/mouse controls, and session status transitions.
