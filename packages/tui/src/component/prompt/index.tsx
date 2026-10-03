@@ -9,13 +9,13 @@ import {
   type Renderable,
 } from "@opentui/core"
 import type { CommandContext } from "@opentui/keymap"
-import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
+import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match, For } from "solid-js"
 import { registerOpencodeSpinner } from "../register-spinner"
 import path from "path"
 import { fileURLToPath } from "url"
 import { useLocal } from "../../context/local"
 import { Flag } from "@opencode-ai/core/flag/flag"
-import { tint, useTheme } from "../../context/theme"
+import { selectedForeground, tint, useTheme } from "../../context/theme"
 import { EmptyBorder, SplitBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
@@ -38,6 +38,8 @@ import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { AssistantMessage, FilePart, UserMessage } from "@opencode-ai/sdk/v2"
+import type { DeliveryMode } from "../../context/delivery"
+import { cancelQueuedFollowup, nextQueuedFollowup, shouldQueueFollowup } from "../../prompt/followup-queue"
 import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
@@ -59,7 +61,6 @@ import { readLocalAttachment } from "./local-attachment"
 import { useLocation } from "../../context/location"
 
 registerOpencodeSpinner()
-
 export type PromptProps = {
   sessionID?: string
   visible?: boolean
@@ -106,6 +107,16 @@ const DRAFT_RETENTION_MIN_CHARS = 20
 function randomIndex(count: number) {
   if (count <= 0) return 0
   return Math.floor(Math.random() * count)
+}
+
+// Centers a pill label within a fixed width so "STEERING" and "QUEUED" render
+// as equal-width blocks, keeping the prompt text after them aligned.
+const PILL_LABEL_WIDTH = 10
+
+function pillLabel(text: string) {
+  const pad = Math.max(0, PILL_LABEL_WIDTH - text.length)
+  const left = Math.floor(pad / 2)
+  return " ".repeat(left) + text + " ".repeat(pad - left)
 }
 
 function fadeColor(color: RGBA, alpha: number) {
@@ -298,6 +309,46 @@ export function Prompt(props: PromptProps) {
     interrupt: 0,
   })
 
+  type QueuedFollowup = {
+    id: string
+    delivery: DeliveryMode
+    text: string
+    send: () => Promise<void>
+  }
+
+  const [queuedFollowups, setQueuedFollowups] = createStore<QueuedFollowup[]>([])
+  const [sendingQueuedFollowup, setSendingQueuedFollowup] = createSignal(false)
+
+  createEffect(
+    on(
+      () => status().type,
+      (value) => {
+        if (value !== "idle") return
+        if (sendingQueuedFollowup()) return
+
+        const next = nextQueuedFollowup(value, sendingQueuedFollowup(), queuedFollowups)
+        if (!next) return
+
+        setSendingQueuedFollowup(true)
+        setQueuedFollowups((items) => items.slice(1))
+        void next
+          .send()
+          .catch((error) => {
+            setQueuedFollowups((items) => [next, ...items])
+            toast.show({
+              title: "Failed to send queued follow-up",
+              message: errorMessage(error),
+              variant: "error",
+            })
+          })
+          .finally(() => {
+            setSendingQueuedFollowup(false)
+          })
+      },
+      { defer: true },
+    ),
+  )
+
   createEffect(
     on(
       () => props.sessionID,
@@ -387,6 +438,17 @@ export function Prompt(props: PromptProps) {
           if (content?.mime === "text/plain") {
             await pasteInputText(content.data)
           }
+        },
+      },
+      {
+        title: "Cancel latest queued follow-up",
+        name: "session.pending_prompt.cancel",
+        category: "Session",
+        hidden: true,
+        enabled: queuedFollowups.length > 0,
+        run: () => {
+          setQueuedFollowups((items) => cancelQueuedFollowup(items, items.at(-1)?.id ?? ""))
+          dialog.clear()
         },
       },
       {
@@ -574,6 +636,7 @@ export function Prompt(props: PromptProps) {
       "prompt.stash.list",
       "prompt.skills",
       "session.interrupt",
+      "session.pending_prompt.cancel",
       "workspace.set",
       "session.move",
     ]),
@@ -1091,32 +1154,44 @@ export function Prompt(props: PromptProps) {
       })
     } else {
       move.startSubmit()
-      sdk.client.session
-        .prompt(
+      const request = {
+        sessionID,
+        ...selectedModel,
+        agent: agent.name,
+        model: selectedModel,
+        variant,
+        parts: [
+          ...editorParts,
           {
-            sessionID,
-            ...selectedModel,
-            agent: agent.name,
-            model: selectedModel,
-            variant,
-            parts: [
-              ...editorParts,
-              {
-                type: "text",
-                text: inputText,
-              },
-              ...nonTextParts,
-            ],
+            type: "text" as const,
+            text: inputText,
           },
-          { throwOnError: true },
-        )
-        .catch((error) => {
+          ...nonTextParts,
+        ],
+      }
+      const send = async () => {
+        await sdk.client.session.prompt(request, { throwOnError: true })
+      }
+
+      if (shouldQueueFollowup(status().type, local.delivery.mode)) {
+        setQueuedFollowups((items) => [
+          ...items,
+          {
+            id: crypto.randomUUID(),
+            delivery: "queue",
+            text: inputText,
+            send,
+          },
+        ])
+      } else {
+        void send().catch((error) => {
           toast.show({
             title: "Failed to send prompt",
             message: errorMessage(error),
             variant: "error",
           })
         })
+      }
       if (editorParts.length > 0) editor.markSelectionSent()
     }
     history.append({
@@ -1366,6 +1441,32 @@ export function Prompt(props: PromptProps) {
             flexGrow={1}
             width="100%"
           >
+            <Show when={queuedFollowups.length > 0}>
+              <box flexDirection="column" paddingBottom={1} gap={0}>
+                <For each={queuedFollowups}>
+                  {(item) => (
+                    <box flexDirection="row" gap={1}>
+                      <text wrapMode="none">
+                        <span style={{ bg: theme.warning, fg: selectedForeground(theme, theme.warning), bold: true }}>
+                          {pillLabel("QUEUED")}
+                        </span>
+                      </text>
+                      <text fg={theme.textMuted} wrapMode="none" flexGrow={1}>
+                        {Locale.truncate(item.text, 70)}
+                      </text>
+                      <text
+                        fg={theme.error}
+                        onMouseUp={() => {
+                          setQueuedFollowups((items) => cancelQueuedFollowup(items, item.id))
+                        }}
+                      >
+                        Cancel
+                      </text>
+                    </box>
+                  )}
+                </For>
+              </box>
+            </Show>
             <textarea
               width="100%"
               placeholder={placeholderText()}
@@ -1451,6 +1552,35 @@ export function Prompt(props: PromptProps) {
                       </text>
                       <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
                         <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>auto</text>
+                      </Show>
+                      <Show when={store.mode === "normal" && status().type !== "idle"}>
+                        <text onMouseUp={() => local.delivery.toggle()} fg={fadeColor(theme.textMuted, agentMetaAlpha())}>
+                          [
+                          <span
+                            style={{
+                              fg: fadeColor(
+                                local.delivery.mode === "steer" ? theme.text : theme.textMuted,
+                                agentMetaAlpha(),
+                              ),
+                              bold: local.delivery.mode === "steer",
+                            }}
+                          >
+                            steer
+                          </span>
+                          |
+                          <span
+                            style={{
+                              fg: fadeColor(
+                                local.delivery.mode === "queue" ? theme.warning : theme.textMuted,
+                                agentMetaAlpha(),
+                              ),
+                              bold: local.delivery.mode === "queue",
+                            }}
+                          >
+                            queue
+                          </span>
+                          ]
+                        </text>
                       </Show>
                       <Show when={store.mode === "normal"}>
                         <box flexDirection="row" gap={1}>

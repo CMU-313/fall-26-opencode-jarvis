@@ -126,6 +126,7 @@ const sessionBindingCommands = [
   "session.toggle.conceal",
   "session.toggle.timestamps",
   "session.toggle.thinking",
+  "session.delivery.toggle",
   "session.toggle.actions",
   "session.toggle.scrollbar",
   "session.toggle.generic_tool_output",
@@ -240,14 +241,6 @@ export function Session() {
   })
   const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
-
-  const pending = createMemo(() => {
-    const completed = messages().findLastIndex((message) => message.role === "assistant" && message.time.completed)
-    const pending = messages().findLastIndex(
-      (message, index) => index > completed && message.role === "assistant" && !message.time.completed,
-    )
-    return pending === -1 ? undefined : pending
-  })
 
   const lastAssistant = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant")
@@ -702,6 +695,19 @@ export function Session() {
       },
       run: () => {
         setTimestamps((prev) => (prev === "show" ? "hide" : "show"))
+        dialog.clear()
+      },
+    },
+    {
+      title: "Toggle queue/steer",
+      value: "session.delivery.toggle",
+      category: "Session",
+      slash: {
+        name: "delivery",
+        aliases: ["toggle-delivery", "queue-mode"],
+      },
+      run: () => {
+        local.delivery.toggle()
         dialog.clear()
       },
     },
@@ -1280,7 +1286,6 @@ export function Session() {
                           }}
                           message={message as UserMessage}
                           parts={sync.data.part[message.id] ?? []}
-                          pending={pending()}
                         />
                       </Match>
                       <Match when={message.role === "assistant"}>
