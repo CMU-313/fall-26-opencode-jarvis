@@ -72,9 +72,9 @@ This agent is useful when you want the LLM to analyze code, suggest changes, or 
 
 _Mode_: `primary`
 
-A read-only agent for learning a codebase. It can read, search, and explain code and answer your questions, but all `file edits` are set to `deny`, so it never modifies your files.
+An agent for learning a codebase while you change it. It can read, search, and explain code and answer your questions. Before any file edit is applied, it asks you a comprehension question about the change. If your answer doesn't show you understand the change, you get feedback and a smaller follow-up question until it does. Dismissing the question rejects the edit.
 
-This agent is useful when you want to understand how something works before changing it.
+This agent is useful when you want to understand every change that lands in your code.
 
 ---
 

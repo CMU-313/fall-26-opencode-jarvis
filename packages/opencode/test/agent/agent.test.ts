@@ -110,16 +110,16 @@ it.instance(
   },
 )
 
-it.instance("learn agent is a visible primary agent that denies edits", () =>
+it.instance("learn agent is a visible primary agent that gates edits behind comprehension", () =>
   Effect.gen(function* () {
     const learn = yield* load((svc) => svc.get("learn"))
     expect(learn).toBeDefined()
     expect(learn?.mode).toBe("primary")
     expect(learn?.native).toBe(true)
     expect(learn?.hidden).not.toBe(true)
-    expect(evalPerm(learn, "edit")).toBe("deny")
-    // Unlike plan, no carve-out for plan files
-    expect(Permission.evaluate("edit", ".opencode/plans/foo.md", learn!.permission).action).toBe("deny")
+    // Edits are allowed by permission; SessionTools runs the comprehension check when learnMode is set
+    expect(learn?.options.learnMode).toBe(true)
+    expect(evalPerm(learn, "edit")).toBe("allow")
     expect(evalPerm(learn, "question")).toBe("allow")
     expect(evalPerm(learn, "read")).toBe("allow")
   }),
@@ -133,19 +133,28 @@ it.instance("learn agent is green", () =>
   }),
 )
 
-it.instance("learn agent hides the edit tools from the model", () =>
+it.instance("learn agent keeps the edit tools available to the model", () =>
   Effect.gen(function* () {
     const learn = yield* load((svc) => svc.get("learn"))
     const disabled = Permission.disabled(["edit", "write", "apply_patch", "read", "grep", "bash"], learn!.permission)
-    expect(disabled.has("edit")).toBe(true)
-    expect(disabled.has("write")).toBe(true)
-    expect(disabled.has("apply_patch")).toBe(true)
-    expect(disabled.has("read")).toBe(false)
-    expect(disabled.has("grep")).toBe(false)
-    // bash stays available on purpose - running tests and git is part of learning.
-    // The read-only constraint on it is carried by the learn reminder prompt.
-    expect(disabled.has("bash")).toBe(false)
+    expect(disabled.size).toBe(0)
   }),
+)
+
+it.instance(
+  "learn agent keeps learnMode when the user adds options",
+  () =>
+    Effect.gen(function* () {
+      const learn = yield* load((svc) => svc.get("learn"))
+      expect(learn?.options).toMatchObject({ learnMode: true, custom: "value" })
+    }),
+  {
+    config: {
+      agent: {
+        learn: { options: { custom: "value" } },
+      },
+    },
+  },
 )
 
 it.instance(

@@ -181,18 +181,16 @@ const layer = Layer.effect(
           },
           learn: {
             name: "learn",
-            description: "Learn mode. Only accept responses from the model, if the user answers comprehension questions correctly. (feature not built yet)",
+            description: "Learn mode. Each file edit waits until you answer a comprehension question about the change.",
             // Pinned green. The positional fallback in the TUI would otherwise land
             // learn on theme.warning, which reads as yellow.
             color: "success",
-            options: {},
+            // Gates every edit permission behind ComprehensionHandoff.gate in SessionTools.
+            options: { learnMode: true },
             permission: Permission.merge(
               defaults,
               Permission.fromConfig({
                 question: "allow",
-                edit: {
-                  "*": "deny",
-                },
               }),
               user,
             ),

@@ -55,7 +55,7 @@ afterEach(async () => {
   await disposeAllInstances()
 })
 
-it.instance("learn agent gets the read-only reminder", () =>
+it.instance("learn agent gets the learn reminder", () =>
   Effect.gen(function* () {
     const messages = yield* SessionReminders.apply({
       messages: [userMessage("how does the agent registry work?")],
@@ -65,13 +65,13 @@ it.instance("learn agent gets the read-only reminder", () =>
     const texts = synthetic(messages)
     expect(texts).toHaveLength(1)
     expect(texts[0]).toContain("Learn Mode")
-    expect(texts[0]).toContain("READ-ONLY")
+    expect(texts[0]).toContain("comprehension question")
   }),
 )
 
-// The regression that motivated this: denying the edit tools strips them from the
-// toolset, but bash survives, so the reminder has to forbid shell-based edits too.
-it.instance("learn reminder forbids editing files through bash", () =>
+// Only the edit tools are gated, so the reminder has to forbid shell-based and
+// delegated edits that would skip the comprehension check.
+it.instance("learn reminder forbids editing files around the comprehension check", () =>
   Effect.gen(function* () {
     const messages = yield* SessionReminders.apply({
       messages: [userMessage("add Michael to the contributors in the README")],
@@ -82,10 +82,11 @@ it.instance("learn reminder forbids editing files through bash", () =>
     expect(text).toContain("sed")
     expect(text).toContain("bash command")
     expect(text).toMatch(/only.*read\/inspect/i)
+    expect(text).toContain("subagent")
   }),
 )
 
-it.instance("build agent gets no read-only reminder", () =>
+it.instance("build agent gets no learn reminder", () =>
   Effect.gen(function* () {
     const messages = yield* SessionReminders.apply({
       messages: [userMessage("add Michael to the contributors in the README")],

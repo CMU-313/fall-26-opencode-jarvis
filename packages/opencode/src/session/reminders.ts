@@ -24,9 +24,9 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
   const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
   if (!userMessage) return input.messages
 
-  // Learn mode denies the edit tools via permissions, which strips them from the
-  // toolset entirely. That still leaves bash, so the read-only constraint has to be
-  // stated in the prompt as well - same two-layer approach plan mode uses.
+  // Learn mode gates the edit tools behind a comprehension check, but bash and
+  // subagents could still change files around it, so the prompt has to forbid that -
+  // same two-layer approach plan mode uses.
   if (input.agent.name === "learn") {
     userMessage.parts.push({
       id: PartID.ascending(),
