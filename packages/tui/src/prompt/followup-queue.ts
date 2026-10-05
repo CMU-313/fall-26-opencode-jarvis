@@ -27,26 +27,31 @@ export function cancelQueuedFollowup<T extends { id: string }>(followups: Readon
 export function createFollowupQueue(input: { status: Accessor<string>; onError: (error: unknown) => void }) {
   const [items, setItems] = createStore<QueuedFollowup[]>([])
   const [sending, setSending] = createSignal(false)
+  // A failed send stays at the front but waits for the next turn, so an idle session doesn't retry in a loop.
+  const [failed, setFailed] = createSignal(false)
 
   createEffect(
-    on(
-      input.status,
-      (status) => {
-        const next = nextQueuedFollowup(status, sending(), items)
-        if (!next) return
-        setSending(true)
-        setItems((list) => list.slice(1))
-        void next
-          .send()
-          .catch((error) => {
-            setItems((list) => [next, ...list])
-            input.onError(error)
-          })
-          .finally(() => setSending(false))
-      },
-      { defer: true },
-    ),
+    on(input.status, (status) => {
+      if (status !== "idle") setFailed(false)
+    }),
   )
+
+  // Also re-runs when `sending` clears: the prompt request resolves only after its turn ends,
+  // which can be after the session already reported idle.
+  createEffect(() => {
+    const next = nextQueuedFollowup(input.status(), sending() || failed(), items)
+    if (!next) return
+    setSending(true)
+    setItems((list) => list.slice(1))
+    void next
+      .send()
+      .catch((error) => {
+        setItems((list) => [next, ...list])
+        setFailed(true)
+        input.onError(error)
+      })
+      .finally(() => setSending(false))
+  })
 
   return {
     items,
