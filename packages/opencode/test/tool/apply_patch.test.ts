@@ -46,6 +46,7 @@ type AskInput = {
       deletions: number
       movePath?: string
     }>
+    filediff: { file?: string; patch?: string; additions: number; deletions: number }
   }
 }
 
@@ -147,6 +148,16 @@ describe("tool.apply_patch freeform", () => {
         const updateFile = permissionCall.metadata.files.find((f) => f.type === "update")
         expect(updateFile?.patch).toContain("-line2")
         expect(updateFile?.patch).toContain("+changed")
+
+        // One combined context so learn mode asks a single comprehension question per patch
+        expect(permissionCall.metadata.filediff).toMatchObject({
+          file: "nested/new.txt, delete.txt, modify.txt",
+          additions: 2,
+          deletions: 2,
+        })
+        expect(permissionCall.metadata.filediff.patch).toContain("+created")
+        expect(permissionCall.metadata.filediff.patch).toContain("-obsolete")
+        expect(permissionCall.metadata.filediff.patch).toContain("+changed")
 
         expect(yield* readText(path.join(test.directory, "nested", "new.txt"))).toBe("created\n")
         expect(yield* readText(modifyPath)).toBe("line1\nchanged\n")

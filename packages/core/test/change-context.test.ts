@@ -65,4 +65,21 @@ describe("ChangeContext", () => {
     expect(result).toMatchObject({ additions: 0, deletions: 0 })
     expect(parsePatch(result.patch!)[0].hunks).toEqual([])
   })
+
+  test("combines several files into one context whose patch keeps every file", () => {
+    const first = ChangeContext.extract("a.ts", "old a\n", "new a\n")
+    const second = ChangeContext.extract("b.ts", undefined, "created\n")
+    const result = ChangeContext.combine([first, second])
+
+    expect(result).toMatchObject({ file: "a.ts, b.ts", status: "modified", additions: 2, deletions: 1 })
+    const patches = parsePatch(result.patch!)
+    expect(patches.map((patch) => patch.newFileName)).toEqual(["a.ts", "b.ts"])
+    expect(applyPatch("old a\n", patches[0])).toBe("new a\n")
+    expect(applyPatch("", patches[1])).toBe("created\n")
+  })
+
+  test("returns a single context unchanged", () => {
+    const context = ChangeContext.extract("new.ts", undefined, "created\n")
+    expect(ChangeContext.combine([context])).toBe(context)
+  })
 })

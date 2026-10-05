@@ -23,3 +23,15 @@ export function extract(file: string, original: string | undefined, proposed: st
     ...counts,
   }
 }
+
+/** Joins per-file contexts so a multi-file change is quizzed as a single unit. */
+export function combine(contexts: ReadonlyArray<FileDiff.Info>): FileDiff.Info {
+  if (contexts.length === 1) return contexts[0]
+  return {
+    file: contexts.flatMap((context) => context.file ?? []).join(", "),
+    patch: contexts.flatMap((context) => context.patch ?? []).join(""),
+    status: "modified",
+    additions: contexts.reduce((sum, context) => sum + context.additions, 0),
+    deletions: contexts.reduce((sum, context) => sum + context.deletions, 0),
+  }
+}
