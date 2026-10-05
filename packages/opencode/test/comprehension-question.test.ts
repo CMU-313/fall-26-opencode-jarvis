@@ -75,6 +75,50 @@ describe("ComprehensionQuestion", () => {
     }),
   )
 
+  it.effect("sends only the most recent failed attempts so retries can narrow the question", () =>
+    Effect.gen(function* () {
+      const attempts = Array.from({ length: 5 }, (_, index) => ({
+        question: `Question ${index}?`,
+        response: `Answer ${index}`,
+        feedback: `Feedback ${index}`,
+      }))
+      const requests: LLM.StreamInput[] = []
+      yield* ComprehensionQuestion.generate({ ...input, attempts }).pipe(
+        Effect.provide(
+          Layer.mock(LLM.Service, {
+            stream: (request) => {
+              requests.push(request)
+              return Stream.make(LLMEvent.textDelta({ id: "question", text: question }))
+            },
+          }),
+        ),
+      )
+      expect(requests[0].messages).toEqual([
+        {
+          role: "user",
+          content: JSON.stringify({
+            file: input.context.file,
+            patch: input.context.patch,
+            attempts: attempts.slice(-ComprehensionQuestion.MAX_ATTEMPT_HISTORY),
+          }),
+        },
+      ])
+      expect(requests[0].agent.prompt).toContain("smaller, more concrete step")
+    }),
+  )
+
+  const validOutputs = [
+    "What does `user?.name` return when user is undefined?",
+    "Why does `count >= limit ? stop() : next()` now stop at the limit?",
+  ]
+  validOutputs.forEach((text, index) => {
+    it.effect(`accepts question marks inside code spans ${index}`, () =>
+      Effect.gen(function* () {
+        expect(yield* ComprehensionQuestion.generate(input).pipe(Effect.provide(respond(text)))).toBe(text)
+      }),
+    )
+  })
+
   const invalid = [
     { ...input.context, patch: undefined },
     { ...input.context, file: undefined },

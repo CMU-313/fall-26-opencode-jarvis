@@ -21,21 +21,24 @@ export interface Submission {
 }
 
 export interface EvaluatedSubmission extends Submission {
+  readonly response: string
   readonly evaluation: ComprehensionEvaluation.Result
 }
 
 export const present = Effect.fn("ComprehensionHandoff.present")(function* (input: {
   pending: PendingChange
-  feedback?: string
   model: Provider.Model
+  attempts?: ReadonlyArray<ComprehensionQuestion.Attempt>
 }) {
   const question = yield* ComprehensionQuestion.generate({
     context: input.pending.context,
     sessionID: input.pending.sessionID,
     model: input.model,
+    attempts: input.attempts,
   })
   const questions = yield* Question.Service
-  const prompt = input.feedback ? `Previous answer did not pass: ${input.feedback}\n\n${question}` : question
+  const feedback = input.attempts?.at(-1)?.feedback
+  const prompt = feedback ? `Previous answer did not pass: ${feedback}\n\n${question}` : question
   const answers = yield* questions.ask({
     sessionID: input.pending.sessionID,
     tool: input.pending.tool,
@@ -47,7 +50,7 @@ export const present = Effect.fn("ComprehensionHandoff.present")(function* (inpu
 export const presentAndEvaluate = Effect.fn("ComprehensionHandoff.presentAndEvaluate")(function* (input: {
   pending: PendingChange
   model: Provider.Model
-  feedback?: string
+  attempts?: ReadonlyArray<ComprehensionQuestion.Attempt>
 }) {
   const submission = yield* present(input)
   const response = submission.answers[0]?.join("\n") ?? ""
@@ -58,23 +61,24 @@ export const presentAndEvaluate = Effect.fn("ComprehensionHandoff.presentAndEval
     question: submission.question,
     response,
   })
-  return { ...submission, evaluation } satisfies EvaluatedSubmission
+  return { ...submission, response, evaluation } satisfies EvaluatedSubmission
 })
 
 export const gate = Effect.fn("ComprehensionHandoff.gate")(function* (input: {
   pending: PendingChange
   model: Provider.Model
 }) {
-  let feedback: string | undefined
-
+  // Retries are unlimited by design: each failure is fed back so the next question is a smaller step.
+  // Dismissing the question fails with Question.RejectedError, which is the student's way out.
+  const attempts: ComprehensionQuestion.Attempt[] = []
   while (true) {
-    const submission = yield* presentAndEvaluate({ ...input, feedback })
-
-    if (submission.evaluation.passed) {
-      return submission
-    }
-
-    feedback = submission.evaluation.feedback
+    const submission = yield* presentAndEvaluate({ ...input, attempts: [...attempts] })
+    if (submission.evaluation.passed) return submission
+    attempts.push({
+      question: submission.question,
+      response: submission.response,
+      feedback: submission.evaluation.feedback,
+    })
   }
 })
 

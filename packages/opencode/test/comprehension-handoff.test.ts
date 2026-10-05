@@ -152,6 +152,7 @@ describe("ComprehensionHandoff", () => {
         pending,
         question: text,
         answers: [["Equality now returns true."]],
+        response: "Equality now returns true.",
         evaluation,
       })
       expect(calls).toBe(2)
@@ -187,16 +188,20 @@ describe("ComprehensionHandoff", () => {
       yield* Effect.addFinalizer(() => off)
 
       let calls = 0
+      let retryContent: unknown
       const failed = { passed: false, feedback: "This should mention that equality is now included." }
       const passed = { passed: true, feedback: "The response explains the behavior change." }
       const fiber = yield* ComprehensionHandoff.gate({ pending, model }).pipe(
         Effect.provide(
           Layer.mock(LLM.Service, {
-            stream: () => {
+            stream: (request) => {
               calls++
               if (calls === 1) return Stream.make(LLMEvent.textDelta({ id: "question-1", text }))
               if (calls === 2) return Stream.make(LLMEvent.textDelta({ id: "evaluation-1", text: JSON.stringify(failed) }))
-              if (calls === 3) return Stream.make(LLMEvent.textDelta({ id: "question-2", text }))
+              if (calls === 3) {
+                retryContent = request.messages[0]?.content
+                return Stream.make(LLMEvent.textDelta({ id: "question-2", text }))
+              }
               return Stream.make(LLMEvent.textDelta({ id: "evaluation-2", text: JSON.stringify(passed) }))
             },
           }),
@@ -227,9 +232,18 @@ describe("ComprehensionHandoff", () => {
         pending,
         question: text,
         answers: [["Equality now returns true."]],
+        response: "Equality now returns true.",
         evaluation: passed,
       })
       expect(calls).toBe(4)
+      // The retry question is generated from the failed attempt so it can break the concept down.
+      expect(retryContent).toBe(
+        JSON.stringify({
+          file: pending.context.file,
+          patch: pending.context.patch,
+          attempts: [{ question: text, response: "I don't know.", feedback: failed.feedback }],
+        }),
+      )
       expect(yield* questions.list()).toEqual([])
       expect(yield* Effect.promise(() => Bun.file(file).text())).toBe(original)
     }),
