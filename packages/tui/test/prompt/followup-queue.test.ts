@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { cancelQueuedFollowup, nextQueuedFollowup, shouldQueueFollowup } from "../../src/prompt/followup-queue"
+import { createRoot, createSignal } from "solid-js"
+import {
+  cancelQueuedFollowup,
+  createFollowupQueue,
+  nextQueuedFollowup,
+  shouldQueueFollowup,
+} from "../../src/prompt/followup-queue"
 
 describe("shouldQueueFollowup", () => {
   test("queues queue-mode follow-ups while a session is active", () => {
@@ -50,3 +56,132 @@ describe("cancelQueuedFollowup", () => {
     expect(cancelQueuedFollowup([first, second], second.id)).toEqual([first])
   })
 })
+
+describe("createFollowupQueue", () => {
+  test("holds follow-ups while the turn runs and sends them in order, one turn at a time", async () => {
+    await withQueue(async (h) => {
+      h.add("first")
+      h.add("second")
+      await flush()
+      expect(h.sent).toEqual([])
+      expect(h.texts()).toEqual(["first", "second"])
+
+      h.setStatus("idle")
+      await flush()
+      expect(h.sent).toEqual(["first"])
+      expect(h.texts()).toEqual(["second"])
+
+      h.setStatus("busy")
+      h.finish()
+      await flush()
+      expect(h.sent).toEqual(["first"])
+
+      h.setStatus("idle")
+      await flush()
+      expect(h.sent).toEqual(["first", "second"])
+      expect(h.texts()).toEqual([])
+    })
+  })
+
+  test("sends the next follow-up when the request resolves after the session already went idle", async () => {
+    await withQueue(async (h) => {
+      h.add("first")
+      h.add("second")
+      h.setStatus("idle")
+      await flush()
+      expect(h.sent).toEqual(["first"])
+
+      h.setStatus("busy")
+      h.setStatus("idle")
+      await flush()
+      expect(h.sent).toEqual(["first"])
+
+      h.finish()
+      await flush()
+      expect(h.sent).toEqual(["first", "second"])
+    })
+  })
+
+  test("cancel removes a specific follow-up and cancelLatest removes the newest", async () => {
+    await withQueue(async (h) => {
+      h.add("first")
+      h.add("second")
+      h.add("third")
+
+      h.queue.cancel(h.queue.items[1].id)
+      expect(h.texts()).toEqual(["first", "third"])
+
+      h.queue.cancelLatest()
+      expect(h.texts()).toEqual(["first"])
+
+      h.queue.cancelLatest()
+      h.setStatus("idle")
+      await flush()
+      expect(h.sent).toEqual([])
+    })
+  })
+
+  test("a failed send is reported and kept at the front until the next turn ends", async () => {
+    await withQueue(async (h) => {
+      h.add("first", () => Promise.reject(new Error("offline")))
+      h.add("second")
+      h.setStatus("idle")
+      await flush()
+
+      expect(h.errors).toEqual(["offline"])
+      expect(h.texts()).toEqual(["first", "second"])
+      expect(h.sent).toEqual([])
+
+      h.setStatus("busy")
+      h.setStatus("idle")
+      await flush()
+      expect(h.errors).toEqual(["offline", "offline"])
+    })
+  })
+})
+
+async function withQueue(fn: (harness: ReturnType<typeof createHarness>) => Promise<void>) {
+  await createRoot(async (dispose) => {
+    try {
+      await fn(createHarness())
+    } finally {
+      dispose()
+    }
+  })
+}
+
+function createHarness() {
+  const [status, setStatus] = createSignal("busy")
+  const sent: string[] = []
+  const errors: string[] = []
+  const pending: (() => void)[] = []
+  const queue = createFollowupQueue({
+    status,
+    onError: (error) => errors.push(error instanceof Error ? error.message : String(error)),
+  })
+  return {
+    queue,
+    sent,
+    errors,
+    setStatus,
+    texts: () => queue.items.map((item) => item.text),
+    // Sends stay pending like the real prompt request, which resolves only when its turn ends.
+    add(text: string, send?: () => Promise<void>) {
+      queue.add(
+        text,
+        send ??
+          (() => {
+            sent.push(text)
+            return new Promise<void>((resolve) => pending.push(resolve))
+          }),
+      )
+    },
+    finish() {
+      pending.shift()?.()
+    },
+  }
+}
+
+function flush() {
+  return Bun.sleep(0)
+}
