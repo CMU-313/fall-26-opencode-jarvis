@@ -7,6 +7,7 @@ import { ProviderTransform } from "@/provider/transform"
 import { MCP } from "@/mcp"
 import { McpCatalog } from "@/mcp/catalog"
 import { Permission } from "@/permission"
+import { Question } from "@/question"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -81,7 +82,17 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         context,
       },
       model: input.model,
-    })
+    }).pipe(
+      // A dismissed question must still block the turn; any other failure goes back to the
+      // model as feedback (e.g. a change too large to quiz on) instead of crashing the tool.
+      Effect.mapError((error) =>
+        error instanceof Question.RejectedError
+          ? error
+          : new PermissionV1.CorrectedError({
+              feedback: `The comprehension check could not run: ${error.message} Make a smaller, focused edit or try again.`,
+            }),
+      ),
+    )
   })
 
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({

@@ -77,6 +77,15 @@ describe("ComprehensionEvaluation", () => {
     }),
   )
 
+  const wrapped = ["```json\n" + JSON.stringify(passed) + "\n```", "Here is the evaluation: " + JSON.stringify(passed)]
+  wrapped.forEach((text, index) => {
+    it.effect(`accepts evaluation JSON wrapped in extra text ${index}`, () =>
+      Effect.gen(function* () {
+        expect(yield* ComprehensionEvaluation.evaluate(input).pipe(Effect.provide(respond(text)))).toEqual(passed)
+      }),
+    )
+  })
+
   it.effect("fails an empty response without invoking the model", () =>
     Effect.gen(function* () {
       const result = yield* ComprehensionEvaluation.evaluate({ ...input, response: "   " }).pipe(
@@ -162,6 +171,7 @@ describe("ComprehensionEvaluation", () => {
 
   const invalidOutputs = [
     "",
+    "The student passed.",
     JSON.stringify({ passed: true }),
     JSON.stringify({ passed: "yes", feedback: "Looks fine." }),
     JSON.stringify({ passed: true, feedback: "" }),

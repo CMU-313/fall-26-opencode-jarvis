@@ -4,7 +4,7 @@ import { ChangeContext } from "@opencode-ai/core/change-context"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { LLMEvent } from "@opencode-ai/llm"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
-import { Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { Agent } from "@/agent/agent"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { LLM } from "@/session/llm"
@@ -224,6 +224,29 @@ describe("SessionTools comprehension gate", () => {
       expect(yield* Fiber.join(fiber)).toMatchObject({ output: "edit continued" })
       expect(permissionRequests.map((request) => request.permission)).toEqual(["edit"])
       expect(continued).toBe(true)
+    }),
+  )
+
+  it.instance("rejects the edit with feedback when the comprehension check cannot run", () =>
+    Effect.gen(function* () {
+      const permissionRequests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+      let continued = false
+
+      const exit = yield* runFakeEdit({
+        learnMode: true,
+        afterAsk: () => {
+          continued = true
+        },
+      }).pipe(Effect.provide(permissionLayer(permissionRequests)), Effect.provide(failingLlm()), Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        const error = Cause.squash(exit.cause)
+        expect(error).toBeInstanceOf(PermissionV1.CorrectedError)
+        expect((error as PermissionV1.CorrectedError).feedback).toContain("comprehension check could not run")
+      }
+      expect(permissionRequests).toEqual([])
+      expect(continued).toBe(false)
     }),
   )
 

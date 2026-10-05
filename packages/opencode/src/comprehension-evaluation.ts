@@ -44,7 +44,7 @@ const agent: Agent.Info = {
   ].join("\n"),
 }
 
-const decodeResult = Schema.decodeUnknownEffect(Result)
+const decodeResult = Schema.decodeUnknownEffect(Schema.fromJsonString(Result))
 
 export const evaluate = Effect.fn("ComprehensionEvaluation.evaluate")(function* (input: {
   context: ReturnType<typeof ChangeContext.extract>
@@ -118,11 +118,8 @@ export const evaluate = Effect.fn("ComprehensionEvaluation.evaluate")(function* 
       Effect.mapError(() => new EvaluationFailed({ message: "Unable to evaluate the comprehension response." })),
     )
 
-  const parsed = yield* Effect.try({
-    try: () => JSON.parse(result.trim()) as unknown,
-    catch: () => new EvaluationFailed({ message: "The model did not return valid evaluation JSON." }),
-  })
-  const evaluation = yield* decodeResult(parsed).pipe(
+  // Models often wrap the JSON in a code fence or a sentence, so decode only the outermost object.
+  const evaluation = yield* decodeResult(result.slice(result.indexOf("{"), result.lastIndexOf("}") + 1)).pipe(
     Effect.mapError(() => new EvaluationFailed({ message: "The model returned an invalid evaluation result." })),
   )
 
