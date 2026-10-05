@@ -38,8 +38,7 @@ import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { AssistantMessage, FilePart, UserMessage } from "@opencode-ai/sdk/v2"
-import type { DeliveryMode } from "../../context/delivery"
-import { cancelQueuedFollowup, nextQueuedFollowup, shouldQueueFollowup } from "../../prompt/followup-queue"
+import { createFollowupQueue, shouldQueueFollowup, type FollowupQueue } from "../../prompt/followup-queue"
 import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
@@ -63,6 +62,7 @@ import { useLocation } from "../../context/location"
 registerOpencodeSpinner()
 export type PromptProps = {
   sessionID?: string
+  followups?: FollowupQueue
   visible?: boolean
   disabled?: boolean
   onSubmit?: () => void
@@ -309,45 +309,17 @@ export function Prompt(props: PromptProps) {
     interrupt: 0,
   })
 
-  type QueuedFollowup = {
-    id: string
-    delivery: DeliveryMode
-    text: string
-    send: () => Promise<void>
-  }
-
-  const [queuedFollowups, setQueuedFollowups] = createStore<QueuedFollowup[]>([])
-  const [sendingQueuedFollowup, setSendingQueuedFollowup] = createSignal(false)
-
-  createEffect(
-    on(
-      () => status().type,
-      (value) => {
-        if (value !== "idle") return
-        if (sendingQueuedFollowup()) return
-
-        const next = nextQueuedFollowup(value, sendingQueuedFollowup(), queuedFollowups)
-        if (!next) return
-
-        setSendingQueuedFollowup(true)
-        setQueuedFollowups((items) => items.slice(1))
-        void next
-          .send()
-          .catch((error) => {
-            setQueuedFollowups((items) => [next, ...items])
-            toast.show({
-              title: "Failed to send queued follow-up",
-              message: errorMessage(error),
-              variant: "error",
-            })
-          })
-          .finally(() => {
-            setSendingQueuedFollowup(false)
-          })
-      },
-      { defer: true },
-    ),
-  )
+  const followups =
+    props.followups ??
+    createFollowupQueue({
+      status: () => status().type,
+      onError: (error) =>
+        toast.show({
+          title: "Failed to send queued follow-up",
+          message: errorMessage(error),
+          variant: "error",
+        }),
+    })
 
   createEffect(
     on(
@@ -445,9 +417,9 @@ export function Prompt(props: PromptProps) {
         name: "session.pending_prompt.cancel",
         category: "Session",
         hidden: true,
-        enabled: queuedFollowups.length > 0,
+        enabled: followups.items.length > 0,
         run: () => {
-          setQueuedFollowups((items) => cancelQueuedFollowup(items, items.at(-1)?.id ?? ""))
+          followups.cancelLatest()
           dialog.clear()
         },
       },
@@ -1174,15 +1146,7 @@ export function Prompt(props: PromptProps) {
       }
 
       if (shouldQueueFollowup(status().type, local.delivery.mode)) {
-        setQueuedFollowups((items) => [
-          ...items,
-          {
-            id: crypto.randomUUID(),
-            delivery: "queue",
-            text: inputText,
-            send,
-          },
-        ])
+        followups.add(inputText, send)
       } else {
         void send().catch((error) => {
           toast.show({
@@ -1441,9 +1405,9 @@ export function Prompt(props: PromptProps) {
             flexGrow={1}
             width="100%"
           >
-            <Show when={queuedFollowups.length > 0}>
+            <Show when={followups.items.length > 0}>
               <box flexDirection="column" paddingBottom={1} gap={0}>
-                <For each={queuedFollowups}>
+                <For each={followups.items}>
                   {(item) => (
                     <box flexDirection="row" gap={1}>
                       <text wrapMode="none">
@@ -1456,9 +1420,7 @@ export function Prompt(props: PromptProps) {
                       </text>
                       <text
                         fg={theme.error}
-                        onMouseUp={() => {
-                          setQueuedFollowups((items) => cancelQueuedFollowup(items, item.id))
-                        }}
+                        onMouseUp={() => followups.cancel(item.id)}
                       >
                         Cancel
                       </text>

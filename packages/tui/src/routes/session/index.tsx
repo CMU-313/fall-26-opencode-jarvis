@@ -82,6 +82,7 @@ import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { LocationProvider } from "../../context/location"
+import { createFollowupQueue } from "../../prompt/followup-queue"
 
 addDefaultParsers(parsers.parsers)
 
@@ -276,6 +277,16 @@ export function Session() {
   const toast = useToast()
   const sdk = useSDK()
   const editor = useEditorContext()
+  // Owned here rather than by Prompt, which unmounts while a permission or question is pending mid-turn.
+  const followups = createFollowupQueue({
+    status: () => sync.data.session_status?.[route.sessionID]?.type ?? "idle",
+    onError: (error) =>
+      toast.show({
+        title: "Failed to send queued follow-up",
+        message: errorMessage(error),
+        variant: "error",
+      }),
+  })
 
   createEffect(() => {
     const sessionID = route.sessionID
@@ -1333,6 +1344,7 @@ export function Session() {
                         toBottom()
                       }}
                       sessionID={route.sessionID}
+                      followups={followups}
                       right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
                     />
                   </pluginRuntime.Slot>
