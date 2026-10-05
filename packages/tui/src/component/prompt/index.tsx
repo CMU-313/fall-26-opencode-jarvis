@@ -1515,34 +1515,31 @@ export function Prompt(props: PromptProps) {
                       <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
                         <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>auto</text>
                       </Show>
-                      <Show when={store.mode === "normal" && status().type !== "idle"}>
-                        <text onMouseUp={() => local.delivery.toggle()} fg={fadeColor(theme.textMuted, agentMetaAlpha())}>
-                          [
-                          <span
-                            style={{
-                              fg: fadeColor(
-                                local.delivery.mode === "steer" ? theme.text : theme.textMuted,
-                                agentMetaAlpha(),
-                              ),
-                              bold: local.delivery.mode === "steer",
-                            }}
-                          >
-                            steer
-                          </span>
-                          |
-                          <span
-                            style={{
-                              fg: fadeColor(
-                                local.delivery.mode === "queue" ? theme.warning : theme.textMuted,
-                                agentMetaAlpha(),
-                              ),
-                              bold: local.delivery.mode === "queue",
-                            }}
-                          >
-                            queue
-                          </span>
-                          ]
-                        </text>
+                      {/* Keyed on mode: OpenTUI doesn't clear `bold` when a span's style changes in place. */}
+                      <Show when={store.mode === "normal" && status().type !== "idle" && local.delivery.mode} keyed>
+                        {(mode) => (
+                          <text onMouseUp={() => local.delivery.toggle()} fg={fadeColor(theme.textMuted, agentMetaAlpha())}>
+                            [
+                            <span
+                              style={{
+                                fg: fadeColor(mode === "steer" ? theme.text : theme.textMuted, agentMetaAlpha()),
+                                bold: mode === "steer",
+                              }}
+                            >
+                              steer
+                            </span>
+                            |
+                            <span
+                              style={{
+                                fg: fadeColor(mode === "queue" ? theme.warning : theme.textMuted, agentMetaAlpha()),
+                                bold: mode === "queue",
+                              }}
+                            >
+                              queue
+                            </span>
+                            ]
+                          </text>
+                        )}
                       </Show>
                       <Show when={store.mode === "normal"}>
                         <box flexDirection="row" gap={1}>
