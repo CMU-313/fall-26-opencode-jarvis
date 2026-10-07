@@ -10,6 +10,7 @@ import { FileSystem } from "@opencode-ai/core/filesystem"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
 import { Format } from "../format"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { ChangeContext } from "@opencode-ai/core/change-context"
 import { InstanceState } from "@/effect/instance-state"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
@@ -58,6 +59,7 @@ export const WriteTool = Tool.define(
             metadata: {
               filepath,
               diff,
+              filediff: ChangeContext.extract(filepath, exists ? contentOld : undefined, contentNew),
             },
           })
 

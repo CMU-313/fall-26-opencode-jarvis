@@ -10,6 +10,7 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import { trimDiff } from "./edit"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { ChangeContext } from "@opencode-ai/core/change-context"
 import DESCRIPTION from "./apply_patch.txt"
 import { FileSystem } from "@opencode-ai/core/filesystem"
 import { Format } from "../format"
@@ -211,6 +212,15 @@ export const ApplyPatchTool = Tool.define(
           filepath: relativePaths.join(", "),
           diff: totalDiff,
           files,
+          filediff: ChangeContext.combine(
+            fileChanges.map((change, index) =>
+              ChangeContext.extract(
+                files[index].relativePath,
+                change.type === "add" ? undefined : change.oldContent,
+                change.newContent,
+              ),
+            ),
+          ),
         },
       })
 

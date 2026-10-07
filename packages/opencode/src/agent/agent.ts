@@ -179,6 +179,24 @@ const layer = Layer.effect(
             mode: "primary",
             native: true,
           },
+          learn: {
+            name: "learn",
+            description: "Learn mode. Each file edit waits until you answer a comprehension question about the change.",
+            // Pinned green. The positional fallback in the TUI would otherwise land
+            // learn on theme.warning, which reads as yellow.
+            color: "success",
+            // Gates every edit permission behind ComprehensionHandoff.gate in SessionTools.
+            options: { learnMode: true },
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                question: "allow",
+              }),
+              user,
+            ),
+            mode: "primary",
+            native: true,
+          },
           general: {
             name: "general",
             description: `General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.`,
