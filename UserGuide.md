@@ -24,3 +24,24 @@ Tests live in:
 - [`packages/tui/test/prompt/followup-delivery.test.ts`](packages/tui/test/prompt/followup-delivery.test.ts): end-to-end tests that run the real TUI against a fake server. They check that the keybind flips the badge (and which word is bold), that the badge is hidden when idle, that queue mode holds a mid-turn prompt until the turn ends, that steer mode sends immediately, that QUEUED rows are shown, and that queued prompts survive a permission prompt. Edge cases are: multiple queued prompts sent in order, a send that finishes after the session went idle, and a failed send.
 
 These tests are sufficient because they cover each acceptance criterion from our initial plan, and the end-to-end tests record every prompt the TUI sends and control when each turn ends, which lets them verify that a queued prompt is only sent after the current turn finishes. The manual check confirms the same behavior in a real session. 
+
+
+# Learn mode (Michael)
+
+Press **Tab** in the composer to cycle Build → **Learn** → Plan. Learn is shown in green. In Learn mode the agent reads and explains code as usual, but before any file edit is written it asks you a comprehension question about that change. A passing answer applies the edit. A failing answer shows feedback and a smaller follow-up question until you pass. Dismissing the question rejects the edit. The question generation and grading behind this were built by Derek and Rita.
+
+**Manual check:** From `packages/opencode`, run `bun dev <path>` on a small throwaway project. Press Tab until **Learn** is shown in green. Ask for a small edit and confirm a "Comprehension" question appears while the file is unchanged. Answer `I don't know` and confirm you see feedback and a narrower question. Answer correctly and confirm the edit is written. Ask for another edit, dismiss the question, and confirm the file is unchanged. Switch to Build, repeat the edit, and confirm no question appears.
+
+**Automated checks:** From `packages/opencode`, run:
+
+```
+bun test test/agent/agent.test.ts test/session/reminders.test.ts test/session/tools-comprehension.test.ts test/comprehension-question.test.ts test/comprehension-evaluation.test.ts test/comprehension-handoff.test.ts test/tool/apply_patch.test.ts
+```
+
+Tests live in:
+- [`packages/opencode/test/agent/agent.test.ts`](packages/opencode/test/agent/agent.test.ts): Learn is a visible primary agent with `learnMode` on, edits allowed, and a pinned green color, and it can be disabled or set as the default agent.
+- [`packages/opencode/test/session/reminders.test.ts`](packages/opencode/test/session/reminders.test.ts): Learn's reminder forbids editing files through bash or subagents, and Build and Plan don't get it.
+- [`packages/opencode/test/`](packages/opencode/test/) `comprehension-question`, `comprehension-handoff`, `comprehension-evaluation`, and `session/tools-comprehension` tests: my additions check that a retry question is built from earlier failed attempts, a grade wrapped in a code block is still read, and an edit is rejected with feedback when the check can't run.
+- [`packages/opencode/test/tool/apply_patch.test.ts`](packages/opencode/test/tool/apply_patch.test.ts) and [`packages/core/test/change-context.test.ts`](packages/core/test/change-context.test.ts) (run from `packages/core`): a multi-file `apply_patch` edit gets one combined question.
+
+These tests are sufficient because they cover each part I changed, from how Learn is defined to how an edit reaches the check, using a fake model so they don't depend on a real provider. The manual check confirms that a real model's follow-up questions get easier and that the edit is only written after a passing answer.
