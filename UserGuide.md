@@ -16,12 +16,12 @@ While an agent is working, a **[steer | queue]** badge appears in the composer. 
 **Automated checks:** From `packages/tui`, run `bun test`. To run only the files for this feature:
 
 ```
-bun test test/context/delivery.test.tsx test/prompt/followup-delivery.test.ts
+bun test test/context/delivery.test.tsx test/cli/tui/followup-delivery.test.ts
 ```
 
 Tests live in:
 - [`packages/tui/test/context/delivery.test.tsx`](packages/tui/test/context/delivery.test.tsx): the delivery mode flag can be read and toggled.
-- [`packages/tui/test/prompt/followup-delivery.test.ts`](packages/tui/test/prompt/followup-delivery.test.ts): end-to-end tests that run the real TUI against a fake server. They check that the keybind flips the badge (and which word is bold), that the badge is hidden when idle, that queue mode holds a mid-turn prompt until the turn ends, that steer mode sends immediately, that QUEUED rows are shown, and that queued prompts survive a permission prompt. Edge cases are: multiple queued prompts sent in order, a send that finishes after the session went idle, and a failed send.
+- [`packages/tui/test/cli/tui/followup-delivery.test.ts`](packages/tui/test/cli/tui/followup-delivery.test.ts): end-to-end tests that run the real TUI against a fake server. They check that the keybind flips the badge (and which word is bold), that the badge is hidden when idle, that queue mode holds a mid-turn prompt until the turn ends, that steer mode sends immediately, that QUEUED rows are shown, and that queued prompts survive a permission prompt. Edge cases are: multiple queued prompts sent in order, a send that finishes after the session went idle, and a failed send.
 
 These tests are sufficient because they cover each acceptance criterion from our initial plan, and the end-to-end tests record every prompt the TUI sends and control when each turn ends, which lets them verify that a queued prompt is only sent after the current turn finishes. The manual check confirms the same behavior in a real session. 
 
@@ -45,3 +45,39 @@ Tests live in:
 - [`packages/opencode/test/tool/apply_patch.test.ts`](packages/opencode/test/tool/apply_patch.test.ts) and [`packages/core/test/change-context.test.ts`](packages/core/test/change-context.test.ts) (run from `packages/core`): a multi-file `apply_patch` edit gets one combined question.
 
 These tests are sufficient because they cover each part I changed, from how Learn is defined to how an edit reaches the check, using a fake model so they don't depend on a real provider. The manual check confirms that a real model's follow-up questions get easier and that the edit is only written after a passing answer.
+
+
+# Comprehension question context, generation, and handoff (Derek)
+
+In **Learn** mode, a proposed file change produces one short comprehension question about its behavior or reasoning before the change is written. The question uses the proposed diff and nearby unchanged lines, so it focuses on the actual change. A multi-file patch produces one combined question. Select **Type your own answer**, press Enter, type your explanation, and press Enter to submit it. Your answer goes to the team's evaluator; a passing answer allows the pending change, while a failed answer shows feedback and a new, more concrete question. Press Escape at the question prompt to reject the pending change. Question generation and handoff are Derek's work; grading and the Learn-mode edit gate are integrated team features.
+
+**Manual check:** With dependencies installed and a model provider configured, create a throwaway project containing `example.ts` with `export const atLimit = (count: number, limit: number) => count > limit`. From `packages/opencode`, run `bun dev <absolute-path-to-project>` and press Tab until **Learn** is selected. Ask: "Change atLimit to return true when count equals limit, using the edit tool."
+
+1. Confirm a **Comprehension** question appears before `example.ts` changes. It should ask about the comparison's behavior or reasoning, without supplying the answer; exact wording depends on the model.
+2. Select **Type your own answer** and submit `I don't know`. Confirm feedback and another question appear, and the file still uses `>`.
+3. Answer the displayed question in your own words. For a question about equality, explain that `>=` returns true when count equals limit, whereas `>` returned false. Once your answer passes, confirm the file changes to `>=`.
+4. Request another small edit, then press Escape at the question prompt. Confirm that edit is not written. Repeat in Build mode and confirm no comprehension question appears.
+5. In Learn mode, ask for one `apply_patch` change touching two files. Confirm one question covers the combined change rather than separate prompts for each file.
+
+**Automated checks:** Run each command from the indicated package directory, not the repository root:
+
+```sh
+# From packages/core
+bun test test/change-context.test.ts
+
+# From packages/opencode
+bun test test/comprehension-question.test.ts test/comprehension-handoff.test.ts test/tool/edit.test.ts test/tool/write.test.ts
+
+# From packages/tui
+bun test test/cli/tui/comprehension-question.test.tsx
+```
+
+Tests live in:
+
+- [`packages/core/test/change-context.test.ts`](packages/core/test/change-context.test.ts): extracts real diffs for existing and new files, preserves separated changed regions with bounded surrounding context, handles unchanged content, and combines multi-file contexts without losing changes.
+- [`packages/opencode/test/comprehension-question.test.ts`](packages/opencode/test/comprehension-question.test.ts): passes change context as data to the model, joins streamed text, keeps embedded code instructions in the data message, bounds failed-attempt history, accepts question marks inside code spans, and rejects invalid context, malformed questions, and provider failures. It also checks cancellation of generation.
+- [`packages/opencode/test/comprehension-handoff.test.ts`](packages/opencode/test/comprehension-handoff.test.ts): connects the generated question to the pending session and tool call, waits for a user reply, preserves free-text answers, handles dismissal and generation failure, waits for evaluation, and carries feedback into a retry question.
+- [`packages/opencode/test/tool/edit.test.ts`](packages/opencode/test/tool/edit.test.ts) and [`packages/opencode/test/tool/write.test.ts`](packages/opencode/test/tool/write.test.ts): verify that the actual edit and write tools provide change context to their execution boundary, including file creation and replacement.
+- [`packages/tui/test/cli/tui/comprehension-question.test.tsx`](packages/tui/test/cli/tui/comprehension-question.test.tsx): renders the real question UI against a local test server, enters a free-text answer, and verifies the answer submitted through the question API.
+
+These tests cover the feature's boundaries: accurate change context, constrained question output, pending-change identity, asynchronous reply and failure handling, and submission through the user interface. They exercise the implementation with controlled model responses, so results do not depend on provider availability or wording. This is sufficient for the deterministic context, generation validation, and handoff behavior; the manual checks complement it by checking question relevance and the full Learn-mode workflow with a real model.
