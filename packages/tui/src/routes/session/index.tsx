@@ -82,6 +82,7 @@ import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { LocationProvider } from "../../context/location"
+import { createFollowupQueue } from "../../prompt/followup-queue"
 
 addDefaultParsers(parsers.parsers)
 
@@ -126,6 +127,7 @@ const sessionBindingCommands = [
   "session.toggle.conceal",
   "session.toggle.timestamps",
   "session.toggle.thinking",
+  "session.delivery.toggle",
   "session.toggle.actions",
   "session.toggle.scrollbar",
   "session.toggle.generic_tool_output",
@@ -241,14 +243,6 @@ export function Session() {
   const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
 
-  const pending = createMemo(() => {
-    const completed = messages().findLastIndex((message) => message.role === "assistant" && message.time.completed)
-    const pending = messages().findLastIndex(
-      (message, index) => index > completed && message.role === "assistant" && !message.time.completed,
-    )
-    return pending === -1 ? undefined : pending
-  })
-
   const lastAssistant = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant")
   })
@@ -283,6 +277,16 @@ export function Session() {
   const toast = useToast()
   const sdk = useSDK()
   const editor = useEditorContext()
+  // Owned here rather than by Prompt, which unmounts while a permission or question is pending mid-turn.
+  const followups = createFollowupQueue({
+    status: () => sync.data.session_status?.[route.sessionID]?.type ?? "idle",
+    onError: (error) =>
+      toast.show({
+        title: "Failed to send queued follow-up",
+        message: errorMessage(error),
+        variant: "error",
+      }),
+  })
 
   createEffect(() => {
     const sessionID = route.sessionID
@@ -702,6 +706,19 @@ export function Session() {
       },
       run: () => {
         setTimestamps((prev) => (prev === "show" ? "hide" : "show"))
+        dialog.clear()
+      },
+    },
+    {
+      title: "Toggle queue/steer",
+      value: "session.delivery.toggle",
+      category: "Session",
+      slash: {
+        name: "delivery",
+        aliases: ["toggle-delivery", "queue-mode"],
+      },
+      run: () => {
+        local.delivery.toggle()
         dialog.clear()
       },
     },
@@ -1280,7 +1297,6 @@ export function Session() {
                           }}
                           message={message as UserMessage}
                           parts={sync.data.part[message.id] ?? []}
-                          pending={pending()}
                         />
                       </Match>
                       <Match when={message.role === "assistant"}>
@@ -1328,6 +1344,7 @@ export function Session() {
                         toBottom()
                       }}
                       sessionID={route.sessionID}
+                      followups={followups}
                       right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
                     />
                   </pluginRuntime.Slot>

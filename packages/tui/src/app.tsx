@@ -39,6 +39,7 @@ import { DataProvider } from "./context/data"
 import { LocationProvider } from "./context/location"
 import { LocalProvider, useLocal } from "./context/local"
 import { PermissionProvider } from "./context/permission"
+import { DeliveryProvider } from "./context/delivery"
 import { DialogModel } from "./component/dialog-model"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
@@ -303,6 +304,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                           events={input.events}
                                         >
                                           <PermissionProvider>
+                                          <DeliveryProvider>
                                             <ProjectProvider>
                                               <SyncProvider>
                                                 <DataProvider>
@@ -331,6 +333,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                 </DataProvider>
                                               </SyncProvider>
                                             </ProjectProvider>
+                                          </DeliveryProvider>
                                           </PermissionProvider>
                                         </SDKProvider>
                                       </PluginRuntimeProvider>

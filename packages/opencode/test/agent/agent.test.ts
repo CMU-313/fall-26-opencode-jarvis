@@ -50,6 +50,7 @@ it.instance("returns default native agents when no config", () =>
     const names = agents.map((a) => a.name)
     expect(names).toContain("build")
     expect(names).toContain("plan")
+    expect(names).toContain("learn")
     expect(names).toContain("general")
     expect(names).toContain("explore")
     expect(names).toContain("compaction")
@@ -105,6 +106,85 @@ it.instance(
           general: "allow",
         },
       },
+    },
+  },
+)
+
+it.instance("learn agent is a visible primary agent that gates edits behind comprehension", () =>
+  Effect.gen(function* () {
+    const learn = yield* load((svc) => svc.get("learn"))
+    expect(learn).toBeDefined()
+    expect(learn?.mode).toBe("primary")
+    expect(learn?.native).toBe(true)
+    expect(learn?.hidden).not.toBe(true)
+    // Edits are allowed by permission; SessionTools runs the comprehension check when learnMode is set
+    expect(learn?.options.learnMode).toBe(true)
+    expect(evalPerm(learn, "edit")).toBe("allow")
+    expect(evalPerm(learn, "question")).toBe("allow")
+    expect(evalPerm(learn, "read")).toBe("allow")
+  }),
+)
+
+// Pinned rather than positional so adding an agent above learn cannot recolor it.
+it.instance("learn agent is green", () =>
+  Effect.gen(function* () {
+    const learn = yield* load((svc) => svc.get("learn"))
+    expect(learn?.color).toBe("success")
+  }),
+)
+
+it.instance("learn agent keeps the edit tools available to the model", () =>
+  Effect.gen(function* () {
+    const learn = yield* load((svc) => svc.get("learn"))
+    const disabled = Permission.disabled(["edit", "write", "apply_patch", "read", "grep", "bash"], learn!.permission)
+    expect(disabled.size).toBe(0)
+  }),
+)
+
+it.instance(
+  "learn agent keeps learnMode when the user adds options",
+  () =>
+    Effect.gen(function* () {
+      const learn = yield* load((svc) => svc.get("learn"))
+      expect(learn?.options).toMatchObject({ learnMode: true, custom: "value" })
+    }),
+  {
+    config: {
+      agent: {
+        learn: { options: { custom: "value" } },
+      },
+    },
+  },
+)
+
+it.instance(
+  "learn agent disable removes it from list",
+  () =>
+    Effect.gen(function* () {
+      const learn = yield* load((svc) => svc.get("learn"))
+      expect(learn).toBeUndefined()
+      const agents = yield* load((svc) => svc.list())
+      expect(agents.map((a) => a.name)).not.toContain("learn")
+    }),
+  {
+    config: {
+      agent: {
+        learn: { disable: true },
+      },
+    },
+  },
+)
+
+it.instance(
+  "default_agent can be set to learn",
+  () =>
+    Effect.gen(function* () {
+      const agent = yield* load((svc) => svc.defaultAgent())
+      expect(agent).toBe("learn")
+    }),
+  {
+    config: {
+      default_agent: "learn",
     },
   },
 )
@@ -749,6 +829,7 @@ it.instance(
       agent: {
         build: { disable: true },
         plan: { disable: true },
+        learn: { disable: true },
       },
     },
   },
