@@ -121,6 +121,52 @@ describe("createFollowupQueue", () => {
     })
   })
 
+  test("undo stays available behind an in-flight send until dispatch reaches the canceled entry", async () => {
+    await withQueue(async (h) => {
+      h.add("first")
+      h.add("canceled")
+      h.add("last")
+      const id = h.queue.items[1].id
+      h.queue.cancel(id)
+      h.setStatus("idle")
+      await flush()
+      expect(h.sent).toEqual(["first"])
+      expect(h.queue.canUndo).toBe(true)
+
+      // Keep undo available until the previous send finishes, even if the session reports idle first.
+      h.setStatus("busy")
+      h.setStatus("idle")
+      await flush()
+      expect(h.queue.canUndo).toBe(true)
+      h.finish()
+      await flush()
+      expect(h.sent).toEqual(["first", "last"])
+      expect(h.queue.canUndo).toBe(false)
+      h.queue.undo()
+      expect(h.texts()).toEqual([])
+    })
+  })
+
+  test("undo restores the original callback after earlier prompts have left the queue", async () => {
+    await withQueue(async (h) => {
+      h.add("first")
+      h.add("restore me")
+      h.add("last")
+      const original = h.queue.items[1]
+      h.queue.cancel(original.id)
+      h.setStatus("idle")
+      await flush()
+      h.queue.undo()
+      expect(h.texts()).toEqual(["restore me", "last"])
+      expect(h.queue.items[0].id).toBe(original.id)
+      expect(h.queue.items[0].send).toBe(original.send)
+      expect(h.queue.canUndo).toBe(false)
+      h.finish()
+      await flush()
+      expect(h.sent).toEqual(["first", "restore me"])
+    })
+  })
+
   test("a failed send is reported and kept at the front until the next turn ends", async () => {
     await withQueue(async (h) => {
       h.add("first", () => Promise.reject(new Error("offline")))
