@@ -40,6 +40,7 @@ export interface Interface {
   readonly patch: (hash: string) => Effect.Effect<Patch>
   readonly restore: (snapshot: string) => Effect.Effect<void>
   readonly revert: (patches: Patch[]) => Effect.Effect<void>
+  readonly changed: (from: string, to: string) => Effect.Effect<string[]>
   readonly diff: (hash: string) => Effect.Effect<string>
   readonly diffFull: (from: string, to: string) => Effect.Effect<FileDiff[]>
 }
@@ -350,8 +351,14 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           return yield* locked(
             Effect.gen(function* () {
               yield* add()
+              // --no-renames: with rename detection, deleting a file and creating
+              // one with similar content lists only the new name, so undo would
+              // never bring the deleted file back.
               const result = yield* git(
-                [...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", "."])],
+                [
+                  ...quote,
+                  ...args(["diff", "--cached", "--no-ext-diff", "--no-renames", "--name-only", hash, "--", "."]),
+                ],
                 {
                   cwd: state.directory,
                 },
@@ -379,11 +386,40 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           )
         })
 
+        // Files that differ between two snapshots, as absolute paths in the same
+        // form patch() returns them.
+        const changed = Effect.fnUntraced(function* (from: string, to: string) {
+          return yield* locked(
+            Effect.gen(function* () {
+              const result = yield* git(
+                [...quote, ...args(["diff", "--no-ext-diff", "--no-renames", "--name-only", from, to, "--", "."])],
+                { cwd: state.directory },
+              )
+              if (result.code !== 0) {
+                yield* Effect.logWarning("failed to compare snapshots", { from, to, exitCode: result.code })
+                return []
+              }
+              return result.text
+                .trim()
+                .split("\n")
+                .map((x) => x.trim())
+                .filter(Boolean)
+                .map((x) => path.join(state.worktree, x).replaceAll("\\", "/"))
+            }),
+          )
+        })
+
         const restore = Effect.fnUntraced(function* (snapshot: string) {
           return yield* locked(
             Effect.gen(function* () {
               yield* Effect.logInfo("restore", { commit: snapshot })
-              const result = yield* git([...core, ...args(["read-tree", snapshot])], { cwd: state.worktree })
+              // `--reset -u` also deletes files that are in the index but not in the
+              // snapshot, so redo removes a file the AI had deleted (undo brings it
+              // back first). checkout-index below still writes every snapshot file,
+              // including ones that are missing from disk but unchanged in the index.
+              const result = yield* git([...core, ...args(["read-tree", "--reset", "-u", snapshot])], {
+                cwd: state.worktree,
+              })
               if (result.code === 0) {
                 const checkout = yield* git([...core, ...args(["checkout-index", "-a", "-f"])], {
                   cwd: state.worktree,
@@ -765,7 +801,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           Effect.forkScoped,
         )
 
-        return { cleanup, track, patch, restore, revert, diff, diffFull }
+        return { cleanup, track, patch, changed, restore, revert, diff, diffFull }
       }),
     )
 
@@ -787,6 +823,9 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
       }),
       revert: Effect.fn("Snapshot.revert")(function* (patches: Patch[]) {
         return yield* InstanceState.useEffect(state, (s) => s.revert(patches))
+      }),
+      changed: Effect.fn("Snapshot.changed")(function* (from: string, to: string) {
+        return yield* InstanceState.useEffect(state, (s) => s.changed(from, to))
       }),
       diff: Effect.fn("Snapshot.diff")(function* (hash: string) {
         return yield* InstanceState.useEffect(state, (s) => s.diff(hash))
