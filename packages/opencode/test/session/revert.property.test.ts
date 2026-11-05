@@ -20,8 +20,11 @@ const layer = LayerNode.compile(
   LayerNode.group([Session.node, SessionRevert.node, Snapshot.node, SessionProjector.node, CrossSpawnSpawner.node]),
 )
 const it = testEffect(layer)
-const runs = 20
-const timeout = 120_000
+// Override locally for stress runs; CI keeps 20 cases unless explicitly configured.
+const runs = Number(process.env.PROPERTY_RUNS ?? 20)
+const timeout = Number(process.env.PROPERTY_TIMEOUT ?? Math.max(120_000, runs * 6_000))
+if (!Number.isSafeInteger(runs) || runs < 1) throw new Error("PROPERTY_RUNS must be a positive integer")
+if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error("PROPERTY_TIMEOUT must be a positive integer")
 
 // Generators
 // Empty files, Unicode and newline differences check exact restoration (R1).
