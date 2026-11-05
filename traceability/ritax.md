@@ -1,0 +1,30 @@
+# Traceability: Rita Xiao (ritax)
+
+**Target feature:** OpenCode `/undo` feature, where `/undo` focuses on restoring files that were changed by AI. <br>
+Main Source Files: <br>
+- [`packages/tui/src/routes/session/index.tsx`](https://github.com/CMU-313/fall-26-opencode-jarvis/blob/ritax/properties/packages/tui/src/routes/session/index.tsx)
+- [`packages/opencode/src/session/revert.ts`](https://github.com/CMU-313/fall-26-opencode-jarvis/blob/ritax/properties/packages/opencode/src/session/revert.ts)
+- [`packages/opencode/src/snapshot/index.ts`](https://github.com/CMU-313/fall-26-opencode-jarvis/blob/ritax/properties/packages/opencode/src/snapshot/index.ts) <br>
+
+Property Tests are located in:<br>
+- [packages/opencode/test/session/revert.property.test.ts](https://github.com/CMU-313/fall-26-opencode-jarvis/blob/ritax/properties/packages/opencode/test/session/revert.property.test.ts) 
+
+
+## Requirements
+
+| ID | Interview evidence | Requirement | Acceptance Criteria | Changed in P4? | Property (kind) | Test |
+|---|---|---|---|---|---|---|
+| R1 | C-12, O-11: Users expect modified files to return to their original content after undo. | Running /undo should restore a modified file to its state before the undone interaction. | Given greetings.txt originally contains “Hello, Rita!” and OpenCode changes it to “Hello, world!”, running /undo should restore exactly “Hello, Rita!”. | No | Editing then undoing restores exact original contents (round-trip). | [R1(Round-Trip): undo restores exact original contents](https://github.com/CMU-313/fall-26-opencode-jarvis/blob/52750a15f7ff8bbb2fbf70538ab186e0cbda8130/packages/opencode/test/session/revert.property.test.ts#L53) |
+| R2 | C-7, S-3, O-8: “the undo feature should only undo what the AI changed” | Running /undo should revert the undone interaction’s AI changes while preserving manual edits in separate files that the interaction did not modify. | Given the user manually edits fileA and OpenCode edits fileB, running /undo should restore fileB to its previous state while fileA remains unchanged. | Yes | Undo preserves a separate manually edited file while restoring the AI-edited file (invariant). | [R2(Invariant): undo preserves separate manual edits](https://github.com/CMU-313/fall-26-opencode-jarvis/blob/52750a15f7ff8bbb2fbf70538ab186e0cbda8130/packages/opencode/test/session/revert.property.test.ts#L69) |
+| R3 | C-15, O-16, O-17: “They should both return to the original state [after undo].” | After running /undo, all file changes/creations made during the same interaction should be reverted. | Given OpenCode modifies greetings.txt and creates notes.txt in one interaction, running /undo should restore greetings.txt and remove notes.txt. | No | Undo restores file contents and existence to the saved pre-interaction state (model/oracle). | [R3(Oracle): undo reverts all edits and creations in one interaction](https://github.com/CMU-313/fall-26-opencode-jarvis/blob/52750a15f7ff8bbb2fbf70538ab186e0cbda8130/packages/opencode/test/session/revert.property.test.ts#L86) |
+| R4 | S-6, O-5: “I think it would help if you could choose how far back to undo. You might not want to go through every single step one at a time.” | Users must be able to restore a selected specific earlier interaction without needing to repeatedly execute /undo. | Given three completed interactions (1, 2, 3), selecting the state after interaction 1 should restore the associated files to that state and remove the changes from interactions 2 and 3. | No | One direct revert restores the recorded workspace at the selected boundary (model/oracle). | [R4(Oracle): one revert restores a selected earlier workspace](https://github.com/CMU-313/fall-26-opencode-jarvis/blob/52750a15f7ff8bbb2fbf70538ab186e0cbda8130/packages/opencode/test/session/revert.property.test.ts#L120) |
+| R5 | S-5: “Maybe you could have timestamps with the undo history, so you know which points or stage you are going back to.” | For each available state in undo history, there should be a corresponding timestamp displayed. | Given interactions A, B, and C complete at different times, undo history should display each interaction with its individual recorded timestamp. | No | Not tested in P4 property testing. | — |
+| R6 | S-7, C-13, O-19: “There could be some kind of summary telling you what changed and what you still need to do afterwards.” | After /undo, OpenCode must display a confirmation identifying each affected file, the change reverted, and the affected line numbers or ranges. | Given OpenCode modifies lines 3–6 of greetings.txt, running /undo should display a confirmation identifying the change reverted, the affected filename, and the affected lines. | Yes | Not tested in P4 property testing. | — |
+
+Properties written or suggested by opencode or another AI tool: R1, R2, R3, and R4. 
+
+## Requirement changes
+| ID | Original requirement (P3) | Revised requirement | Why it changed |
+|---|---|---|---|
+| R2 | When running /undo command, it should keep the manual edits, and only the AI edits should be undone. | Running /undo should revert the undone interaction’s AI changes while preserving manual edits in separate files that the interaction did not modify. | The original wording could include overlapping manual and AI edits within the same file, but the acceptance criterion describes two separate files. The revision makes the scope explicit and checkable while preserving the protection requested in C-7 and O-8. It does not establish a policy for overlapping edits. |
+| R6 | After /undo, OpenCode must display a summary of the changes reverted and affected files and lines so users can verify the result. | After /undo, OpenCode must display a confirmation identifying each affected file, the change reverted, and the affected line numbers or ranges. | “Affected lines” could mean line counts, line numbers, or actual changed text. The revision specifies line numbers or ranges, matching the original acceptance criterion and O-19’s request to identify which file and line changed. |
