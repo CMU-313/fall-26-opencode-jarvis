@@ -87,6 +87,8 @@ test("R2: appending follow-ups collapses at four and preserves endpoints", async
 
           await view.click("View more")
           expect(markers(await view.frame())).toEqual(items.map((_, i) => `q${i}z`))
+          await view.click("View less")
+          expect(markers(await view.frame())).toEqual(["q0z", `q${items.length - 1}z`])
           expect(h.sent).toEqual([])
         })
       })
