@@ -1,0 +1,27 @@
+diff --git a/packages/tui/src/component/prompt/index.tsx b/packages/tui/src/component/prompt/index.tsx
+index fcdad03..f9fb5c6 100644
+--- a/packages/tui/src/component/prompt/index.tsx
++++ b/packages/tui/src/component/prompt/index.tsx
+@@ -324,11 +324,11 @@ export function Prompt(props: PromptProps) {
+   const [followupsExpanded, setFollowupsExpanded] = createSignal(false)
+   const displayedFollowups = createMemo(() => {
+     const items = followups.items
+-    if (items.length < 4 || followupsExpanded()) return items
++    if (items.length <= 4 || followupsExpanded()) return items
+     return [items[0], items[items.length - 1]]
+   })
+   createEffect(() => {
+-    if (followups.items.length < 4) setFollowupsExpanded(false)
++    if (followups.items.length <= 4) setFollowupsExpanded(false)
+   })
+ 
+   createEffect(
+@@ -1420,7 +1420,7 @@ export function Prompt(props: PromptProps) {
+                 <For each={displayedFollowups()}>
+                   {(item, index) => (
+                     <>
+-                      <Show when={index() === 1 && followups.items.length >= 4 && !followupsExpanded()}>
++                      <Show when={index() === 1 && followups.items.length > 4 && !followupsExpanded()}>
+                         <text fg={theme.textMuted} onMouseUp={() => setFollowupsExpanded(true)}>
+                           View more ({followups.items.length - 2} hidden)
+                         </text>
