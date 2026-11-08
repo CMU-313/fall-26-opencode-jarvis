@@ -1,0 +1,13 @@
+diff --git a/packages/tui/src/prompt/followup-queue.ts b/packages/tui/src/prompt/followup-queue.ts
+index 12652c2..4c4caa9 100644
+--- a/packages/tui/src/prompt/followup-queue.ts
++++ b/packages/tui/src/prompt/followup-queue.ts
+@@ -74,7 +74,7 @@ export function createFollowupQueue(input: { status: Accessor<string>; onError:
+       return items.some((item) => item.id === latest() && item.canceled)
+     },
+     undo() {
+-      const index = items.findIndex((item) => item.id === latest() && item.canceled)
++      const index = items.findIndex((item) => item.canceled)
+       if (index < 0) return
+       batch(() => {
+         setItems(index, "canceled", false)
