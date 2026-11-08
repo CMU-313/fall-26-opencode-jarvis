@@ -1,0 +1,22 @@
+diff --git a/packages/tui/src/prompt/followup-queue.ts b/packages/tui/src/prompt/followup-queue.ts
+index 12652c2..6501aeb 100644
+--- a/packages/tui/src/prompt/followup-queue.ts
++++ b/packages/tui/src/prompt/followup-queue.ts
+@@ -44,14 +44,14 @@ export function createFollowupQueue(input: { status: Accessor<string>; onError:
+     if (input.status() !== "idle" || sending() || failed()) return
+     // Only discard canceled entries when dispatch reaches them. Entries behind an
+     // active prompt retain their original position and send callback for undo.
+-    const index = items.findIndex((item) => !item.canceled)
++    const index = items.findLastIndex((item) => !item.canceled)
+     const next = items[index]
+     batch(() => {
+       if (next) setSending(true)
+-      if (items.slice(0, index < 0 ? items.length : index + 1).some((item) => item.id === latest())) {
++      if (items.slice(index < 0 ? 0 : index).some((item) => item.id === latest())) {
+         setLatest(undefined)
+       }
+-      if (items.length) setItems((list) => (index < 0 ? [] : list.slice(index + 1)))
++      if (items.length) setItems((list) => (index < 0 ? [] : list.slice(0, index)))
+     })
+     if (!next) return
+     void next
