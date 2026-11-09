@@ -1,14 +1,18 @@
 diff --git a/packages/tui/src/prompt/followup-queue.ts b/packages/tui/src/prompt/followup-queue.ts
-index 12652c2..6501aeb 100644
+index 174bd1e..1f7d4af 100644
 --- a/packages/tui/src/prompt/followup-queue.ts
 +++ b/packages/tui/src/prompt/followup-queue.ts
-@@ -44,14 +44,14 @@ export function createFollowupQueue(input: { status: Accessor<string>; onError:
-     if (input.status() !== "idle" || sending() || failed()) return
-     // Only discard canceled entries when dispatch reaches them. Entries behind an
-     // active prompt retain their original position and send callback for undo.
--    const index = items.findIndex((item) => !item.canceled)
-+    const index = items.findLastIndex((item) => !item.canceled)
-     const next = items[index]
+@@ -22,7 +22,7 @@ export function nextQueuedFollowup<T extends { canceled?: boolean }>(
+   failed = false,
+ ) {
+   if (status !== "idle" || sending || failed) return
+-  const index = followups.findIndex((followup) => !followup.canceled)
++  const index = followups.findLastIndex((followup) => !followup.canceled)
+   return { index, next: index < 0 ? undefined : followups[index] }
+ }
+ 
+@@ -60,10 +60,10 @@ export function createFollowupQueue(input: { status: Accessor<string>; onError:
+     const next = selection.next
      batch(() => {
        if (next) setSending(true)
 -      if (items.slice(0, index < 0 ? items.length : index + 1).some((item) => item.id === latest())) {
