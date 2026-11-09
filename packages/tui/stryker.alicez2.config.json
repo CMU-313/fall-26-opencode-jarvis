@@ -4,14 +4,16 @@
     "command": "bun test ./test/prompt/followup-queue.property.test.ts --timeout 30000"
   },
   "mutate": [
-    "src/prompt/followup-queue.ts:13-42",
+    "src/prompt/followup-queue.ts:14:10-14:27",
+    "src/prompt/followup-queue.ts:18-42",
     "src/prompt/followup-queue.ts:54-70",
     "src/prompt/followup-queue.ts:78-99",
     "src/prompt/followup-queue.ts:106-113",
     "src/component/prompt/index.tsx:324-332",
-    "src/component/prompt/index.tsx:1418-1449"
+    "src/component/prompt/index.tsx:1418-1428",
+    "src/component/prompt/index.tsx:1433-1449"
   ],
   "coverageAnalysis": "off",
   "reporters": ["html", "clear-text", "progress"],
-  "concurrency": 1
+  "concurrency": 3
 }
