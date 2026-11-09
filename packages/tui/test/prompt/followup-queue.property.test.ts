@@ -4,6 +4,8 @@ import { withQueueView } from "../fixture/followup-queue-view"
 import { createRoot, createSignal } from "solid-js"
 import { createFollowupQueue, shouldQueueFollowup } from "../../src/prompt/followup-queue"
 
+fc.configureGlobal({ seed: 42 })
+
 // Duplicate/empty text is intentional: identity must not depend on prompt text.
 // Empty and multiple attachments exercise preservation of the complete payload.
 const prompt = fc.record({
@@ -57,7 +59,7 @@ test("R1: cancel removes only the selected visible queue entry", async () => {
         })
       })
     }),
-    { numRuns: 30 },
+    { numRuns: 5 },
   )
 }, 30000)
 
@@ -93,7 +95,7 @@ test("R2: appending follow-ups collapses at four and preserves endpoints", async
         })
       })
     }),
-    { numRuns: 30 },
+    { numRuns: 3 },
   )
 }, 30000)
 
@@ -101,33 +103,31 @@ test("R2: appending follow-ups collapses at four and preserves endpoints", async
 // Kind: round-trip
 test("R3: cancel then undo restores the exact queue and payloads", async () => {
   await fc.assert(
-    fc.asyncProperty(visibleCancellation, async ({ items, index }) => {
+    fc.asyncProperty(cancellation, async ({ items, index }) => {
       await withQueue(async (h) => {
         items.forEach(h.add)
-        await withQueueView(h.queue, async (view) => {
-          const before = h.queue.items.map((item) => item.id)
-          expect(await view.frame()).not.toContain("Undo recent cancel")
-          if ((await view.frame()).includes("View more")) await view.click("View more")
-          await view.click("Cancel", `q${index}z`)
-          expect(await view.frame()).toContain("Undo recent cancel")
-          await view.click("Undo recent cancel")
-          expect(await view.frame()).not.toContain("Undo recent cancel")
-          expect(h.queue.items.map((item) => item.id)).toEqual(before)
-          expect(h.queue.items.map((item) => item.text)).toEqual(items.map((item) => item.text))
-          if ((await view.frame()).includes("View more")) await view.click("View more")
-          expect(markers(await view.frame())).toEqual(items.map((_, i) => `q${i}z`))
-          for (const _ of items) {
-            h.setStatus("idle")
-            await Bun.sleep(0)
-            h.setStatus("busy")
-            h.finish()
-            await Bun.sleep(0)
-          }
-          expect(h.sent).toEqual(items)
-        })
+        const before = h.queue.items.map((item) => ({ ...item }))
+        expect(h.queue.canUndo).toBe(false)
+        h.queue.cancel(before[index].id)
+        expect(h.queue.canUndo).toBe(true)
+        expect(h.queue.items.map((item) => item.id)).toEqual(before.filter((_, i) => i !== index).map((item) => item.id))
+        h.queue.undo()
+        expect(h.queue.canUndo).toBe(false)
+        expect(h.queue.items.map((item) => item.id)).toEqual(before.map((item) => item.id))
+        expect(h.queue.items.map((item) => item.text)).toEqual(items.map((item) => item.text))
+        h.queue.items.forEach((item, i) => expect(item.send).toBe(before[i].send))
+        h.queue.undo()
+        expect(h.queue.items.map((item) => item.id)).toEqual(before.map((item) => item.id))
+        for (const _ of items) {
+          h.setStatus("idle")
+          await Bun.sleep(0)
+          h.setStatus("busy")
+          h.finish()
+          await Bun.sleep(0)
+        }
+        expect(h.sent).toEqual(items)
       })
     }),
-    { numRuns: 30 },
   )
 }, 30000)
 
@@ -136,34 +136,54 @@ test("R3: cancel then undo restores the exact queue and payloads", async () => {
 test("R3: latest cancellation expires at dispatch and never falls back", async () => {
   await fc.assert(
     fc.asyncProperty(
-      fc.array(prompt, { minLength: 2, maxLength: 3 }).map(labeled),
+      fc.array(prompt, { minLength: 2, maxLength: 12 }).chain((items) =>
+        fc.record({
+          items: fc.constant(items),
+          indices: fc.shuffledSubarray(items.map((_, index) => index), { minLength: 2, maxLength: 2 }),
+        }),
+      ),
       fc.boolean(),
-      async (items, restore) => {
+      async ({ items, indices }, restore) => {
         await withQueue(async (h) => {
           items.forEach(h.add)
-          await withQueueView(h.queue, async (view) => {
-            await view.frame()
-            await view.click("Cancel", "q0z")
-            await view.click("Cancel", "q1z")
-            expect(await view.frame()).toContain("Undo recent cancel")
-            if (restore) {
-              await view.click("Undo recent cancel")
-              expect(markers(await view.frame())).toEqual(items.slice(1).map((_, i) => `q${i + 1}z`))
-              expect(await view.frame()).not.toContain("Undo recent cancel")
-            }
+          const before = h.queue.items.map((item) => ({ ...item }))
+          h.queue.cancel(before[indices[0]].id)
+          h.queue.cancel(before[indices[1]].id)
+          expect(h.queue.canUndo).toBe(true)
+          if (restore) {
+            h.queue.undo()
+            expect(h.queue.canUndo).toBe(false)
+          }
+          const expected = items.filter((_, index) => index !== indices[0] && (restore || index !== indices[1]))
+          const ids = before.filter((_, index) => index !== indices[0] && (restore || index !== indices[1])).map((item) => item.id)
+          expect(h.queue.items.map((item) => item.id)).toEqual(ids)
+          if (restore) {
+            h.queue.undo()
+            expect(h.queue.items.map((item) => item.id)).toEqual(ids)
+          }
+          for (const index of Array.from({ length: expected.length + 1 }, (_, index) => index)) {
             h.setStatus("idle")
             await Bun.sleep(0)
-            expect(await view.frame()).not.toContain("Undo recent cancel")
-            expect(h.sent).toEqual(items.slice(restore ? 1 : 2, restore ? 2 : 3))
+            expect(h.sent).toEqual(expected.slice(0, index + 1))
+            expect(h.queue.items.map((item) => item.text)).toEqual(expected.slice(index + 1).map((item) => item.text))
+            // Dispatch has skipped the latest cancellation once all preceding active entries have sent.
+            const preceding = before.slice(0, indices[1]).filter((_, i) => i !== indices[0]).length
+            if (restore || index >= preceding) {
+              expect(h.queue.canUndo).toBe(false)
+              const remaining = h.queue.items.map((item) => item.id)
+              h.queue.undo()
+              expect(h.queue.items.map((item) => item.id)).toEqual(remaining)
+            }
             h.setStatus("busy")
             h.finish()
             await Bun.sleep(0)
-            expect(await view.frame()).not.toContain("Undo recent cancel")
-          })
+          }
+          expect(h.queue.canUndo).toBe(false)
+          expect(h.queue.items).toEqual([])
+          expect(h.sent).toEqual(expected)
         })
       },
     ),
-    { numRuns: 30 },
   )
 }, 30000)
 

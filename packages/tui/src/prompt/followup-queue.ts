@@ -14,14 +14,25 @@ export function shouldQueueFollowup(status: string, delivery: DeliveryMode) {
   return status !== "idle" && delivery === "queue"
 }
 
-export function nextQueuedFollowup<T>(status: string, sending: boolean, followups: ReadonlyArray<T>) {
-  if (status !== "idle") return
-  if (sending) return
-  return followups[0]
+// Undefined means dispatch is blocked; index -1 means canceled entries can be discarded.
+export function nextQueuedFollowup<T extends { canceled?: boolean }>(
+  status: string,
+  sending: boolean,
+  followups: ReadonlyArray<T>,
+  failed = false,
+) {
+  if (status !== "idle" || sending || failed) return
+  const index = followups.findIndex((followup) => !followup.canceled)
+  return { index, next: index < 0 ? undefined : followups[index] }
 }
 
-export function cancelQueuedFollowup<T extends { id: string }>(followups: ReadonlyArray<T>, id: string) {
-  return followups.filter((followup) => followup.id !== id)
+export function cancelQueuedFollowup<T extends { id: string; canceled?: boolean }>(
+  followups: ReadonlyArray<T>,
+  id: string,
+) {
+  const index = followups.findIndex((followup) => followup.id === id && !followup.canceled)
+  if (index < 0) return
+  return { index, item: { ...followups[index], canceled: true } }
 }
 
 export function createFollowupQueue(input: { status: Accessor<string>; onError: (error: unknown) => void }) {
@@ -41,11 +52,12 @@ export function createFollowupQueue(input: { status: Accessor<string>; onError: 
   // Also re-runs when `sending` clears: the prompt request resolves only after its turn ends,
   // which can be after the session already reported idle.
   createEffect(() => {
-    if (input.status() !== "idle" || sending() || failed()) return
+    const selection = nextQueuedFollowup(input.status(), sending(), items, failed())
+    if (!selection) return
     // Only discard canceled entries when dispatch reaches them. Entries behind an
     // active prompt retain their original position and send callback for undo.
-    const index = items.findIndex((item) => !item.canceled)
-    const next = items[index]
+    const index = selection.index
+    const next = selection.next
     batch(() => {
       if (next) setSending(true)
       if (items.slice(0, index < 0 ? items.length : index + 1).some((item) => item.id === latest())) {
@@ -92,10 +104,10 @@ export function createFollowupQueue(input: { status: Accessor<string>; onError: 
   }
 
   function cancel(id: string) {
-    const index = items.findIndex((item) => item.id === id && !item.canceled)
-    if (index < 0) return
+    const cancellation = cancelQueuedFollowup(items, id)
+    if (!cancellation) return
     batch(() => {
-      setItems(index, "canceled", true)
+      setItems(cancellation.index, cancellation.item)
       setLatest(id)
     })
   }
