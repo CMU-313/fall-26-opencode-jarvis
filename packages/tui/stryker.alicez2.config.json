@@ -10,7 +10,8 @@
     "src/prompt/followup-queue.ts:78-99",
     "src/prompt/followup-queue.ts:106-113",
     "src/component/prompt/index.tsx:324-332",
-    "src/component/prompt/index.tsx:1418-1428",
+    "src/component/prompt/index.tsx:1418-1424",
+    "src/component/prompt/index.tsx:1426-1428",
     "src/component/prompt/index.tsx:1433-1449"
   ],
   "coverageAnalysis": "off",

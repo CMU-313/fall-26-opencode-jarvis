@@ -63,34 +63,40 @@ test("R1: cancel removes only the selected visible queue entry", async () => {
   )
 }, 30000)
 
-// R2: At four or more follow-ups, show the first and last with expandable intermediate prompts.
-// Kind: metamorphic. Start with three, then append prompts to the same rendered queue.
-// Generate 4..12 payloads so every run crosses 3 -> 4 and can exercise further appends
+// R2: Generated queues cross the collapse boundary in both directions, including
+// mounting with an existing queue and shrinking an expanded queue before regrowing it.
+// Kind: metamorphic
 test("R2: appending follow-ups collapses at four and preserves endpoints", async () => {
   await fc.assert(
-    fc.asyncProperty(fc.array(prompt, { minLength: 4, maxLength: 12 }).map(labeled), async (items) => {
+    fc.asyncProperty(fc.array(prompt, { minLength: 5, maxLength: 12 }).map(labeled), async (items) => {
       await withQueue(async (h) => {
-        items.slice(0, 3).forEach(h.add)
+        items.forEach(h.add)
         await withQueueView(h.queue, async (view) => {
-          const initial = await view.frame()
-          expect(markers(initial)).toEqual(["q0z", "q1z", "q2z"])
-          expect(initial).not.toContain("View more")
+          expectCollapsed(await view.frame(), "q0z", `q${items.length - 1}z`)
+          await view.click("View more")
+          expect(markers(await view.frame())).toEqual(items.map((_, i) => `q${i}z`))
+
+          for (const index of items.map((_, i) => i).slice(3).reverse()) {
+            await view.click("Cancel", `q${index}z`)
+            const frame = await view.frame()
+            expect(markers(frame)).toEqual(items.slice(0, index).map((_, i) => `q${i}z`))
+            expect(frame).not.toContain("View more")
+            if (index >= 4) expect(frame).toContain("View less")
+            if (index === 3) expect(frame).not.toContain("View less")
+          }
 
           for (const [index, item] of items.slice(3).entries()) {
-            const before = markers(await view.frame())
             h.add(item)
-            const after = await view.frame()
-            // Appending preserves the previously visible first prompt, replaces the
-            // last endpoint with the new prompt, and hides all intermediate prompts.
-            expect(markers(after)).toEqual([before[0], `q${index + 3}z`])
-            expect(after).toContain("View more")
+            expectCollapsed(await view.frame(), "q0z", `q${index + 3}z`)
             expect(h.sent).toEqual([])
           }
 
           await view.click("View more")
-          expect(markers(await view.frame())).toEqual(items.map((_, i) => `q${i}z`))
+          const expanded = await view.frame()
+          expect(markers(expanded)).toEqual(items.map((_, i) => `q${i}z`))
+          expect(expanded).not.toContain("View more")
           await view.click("View less")
-          expect(markers(await view.frame())).toEqual(["q0z", `q${items.length - 1}z`])
+          expectCollapsed(await view.frame(), "q0z", `q${items.length - 1}z`)
           expect(h.sent).toEqual([])
         })
       })
@@ -168,6 +174,7 @@ test("R3: latest cancellation expires at dispatch and never falls back", async (
             expect(h.queue.items.map((item) => item.text)).toEqual(expected.slice(index + 1).map((item) => item.text))
             // Dispatch has skipped the latest cancellation once all preceding active entries have sent.
             const preceding = before.slice(0, indices[1]).filter((_, i) => i !== indices[0]).length
+            if (!restore && index < preceding) expect(h.queue.canUndo).toBe(true)
             if (restore || index >= preceding) {
               expect(h.queue.canUndo).toBe(false)
               const remaining = h.queue.items.map((item) => item.id)
@@ -181,6 +188,85 @@ test("R3: latest cancellation expires at dispatch and never falls back", async (
           expect(h.queue.canUndo).toBe(false)
           expect(h.queue.items).toEqual([])
           expect(h.sent).toEqual(expected)
+        })
+      },
+    ),
+  )
+}, 30000)
+
+// R3: Cancellation remains reversible while earlier generated prompts are in flight.
+// Kind: round-trip across dispatch boundaries
+test("R3: undo behind an in-flight prompt preserves remaining payloads and order", async () => {
+  await fc.assert(
+    fc.asyncProperty(
+      fc.array(prompt, { minLength: 2, maxLength: 12 }).chain((items) =>
+        fc.record({ items: fc.constant(items), index: fc.integer({ min: 1, max: items.length - 1 }) }),
+      ),
+      async ({ items, index }) => {
+        await withQueue(async (h) => {
+          items.forEach(h.add)
+          const before = h.queue.items.map((item) => ({ ...item }))
+          h.queue.cancel(before[index].id)
+          for (const [position] of items.slice(0, index).entries()) {
+            h.setStatus("idle")
+            await Bun.sleep(0)
+            expect(h.sent).toEqual(items.slice(0, position + 1))
+            expect(h.queue.canUndo).toBe(true)
+            h.setStatus("busy")
+            if (position < index - 1) {
+              h.finish()
+              await Bun.sleep(0)
+            }
+          }
+          h.queue.undo()
+          expect(h.queue.canUndo).toBe(false)
+          expect(h.queue.items.map((item) => item.id)).toEqual(before.slice(index).map((item) => item.id))
+          h.queue.items.forEach((item, i) => expect(item.send).toBe(before[index + i].send))
+          h.finish()
+          await Bun.sleep(0)
+          for (const _ of items.slice(index)) {
+            h.setStatus("idle")
+            await Bun.sleep(0)
+            h.setStatus("busy")
+            h.finish()
+            await Bun.sleep(0)
+          }
+          expect(h.sent).toEqual(items)
+          expect(h.queue.items).toEqual([])
+        })
+      },
+    ),
+  )
+}, 30000)
+
+// R4: Emptying a queue through cancellation must not block later generated inputs.
+// Kind: metamorphic
+test("R4: a fully canceled queue can accept and dispatch a new batch", async () => {
+  await fc.assert(
+    fc.asyncProperty(
+      fc.array(prompt, { minLength: 1, maxLength: 12 }),
+      fc.array(prompt, { minLength: 1, maxLength: 12 }),
+      async (canceled, fresh) => {
+        await withQueue(async (h) => {
+          canceled.forEach(h.add)
+          h.queue.items.map((item) => item.id).forEach((id) => h.queue.cancel(id))
+          h.setStatus("idle")
+          await Bun.sleep(0)
+          expect(h.sent).toEqual([])
+          expect(h.queue.items).toEqual([])
+          expect(h.queue.canUndo).toBe(false)
+          h.setStatus("busy")
+          fresh.forEach(h.add)
+          for (const [index] of fresh.entries()) {
+            h.setStatus("idle")
+            await Bun.sleep(0)
+            expect(h.sent).toEqual(fresh.slice(0, index + 1))
+            h.setStatus("busy")
+            h.finish()
+            await Bun.sleep(0)
+          }
+          expect(h.queue.items).toEqual([])
+          expect(h.sent).toEqual(fresh)
         })
       },
     ),
@@ -277,4 +363,12 @@ function labeled(items: Payload[]) {
 
 function markers(frame: string) {
   return Array.from(frame.matchAll(/\bq\d+z\b/g), (match) => match[0])
+}
+
+function expectCollapsed(frame: string, first: string, last: string) {
+  expect(markers(frame)).toEqual([first, last])
+  expect(frame.match(/View more/g) ?? []).toHaveLength(1)
+  expect(frame.indexOf("View more")).toBeGreaterThan(frame.indexOf(first))
+  expect(frame.indexOf("View more")).toBeLessThan(frame.indexOf(last))
+  expect(frame).not.toContain("View less")
 }
