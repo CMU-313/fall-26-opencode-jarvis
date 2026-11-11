@@ -35,3 +35,19 @@ Properties written or suggested by opencode or another AI tool: Code for R1, R2,
 | H3 | R3 | `follow-up-queue.ts`: instead of just resetting that entry's canceled flag to false, remove it from the queue and append it to the end | "Cancel then undo restores the exact queue and payloads" (R3), it will see the queue is not in the same order as before the undo | Killed: test fails when uncanceled prompt originally not at the end of the queue is seen at the end instead of its original position |
 | H4 | R3 | `follow-up-queue.ts`: remove the check for `item.id === latest()` so it would just undo the first canceled prompt in the queue order instead of the most recent one | "Latest cancellation expires at dispatch and never falls back" (R3), it would see that the prompt that got uncanceled is not the most recently canceled one | Killed: queue didn't get the most recently canceled prompt back but rather a different canceled one |
 | H5 | R4 | `follow-up-queue.ts`: change the index to dispatch as the last non-canceled entry in the queue | "Real queue agrees with FIFO across turn completion orderings" (R4), it would realize the most recently added follow-up was dispatched instead of the oldest | Killed: test oracle had oldest follow-up getting dispatched which wasn't equal to mutant having most recent follow-up getting dispatched |
+
+## Stryker comparison
+
+Mutation score: 77.03
+
+Stryker never generated H1, H3, and H5, which had to do with canceling/undoing/dispatching at the last index instead of the actual index. This is probably because it didn't think to use a whole seperate function (findLastIndex vs findIndex) as a mutant.
+A Stryker survivor I would have never thought of would be setting `sending` to true even when dispatch finds no uncanceled prompt. The sending flag would then always be stuck on true. While a real developer might not directly write `if (true)` , they might accidentally write an inner condition that is always true. The handwritten approach finds mutants that form from having more context of the feature/code, while Stryker finds mutants that bypass a human's biased assumptions about things.
+
+### Equivalent mutants
+
+- Changes default `failed` argument from `false` to `true`. Production always passes this argument explicitly so default isn't used.
+- Removes check before accessing `followups[index]`. When `index` is `-1`, arrays already return `undefined`, which is same as original behavior.
+- Prevent clearing the most recently cancelled ID during dispatch. Since dispatch removes the canceled entry, keeping the ID doesn't make it undoable since the entry no longer exists.
+- Other iterations of leaving the most recently cancelled ID. Either it can't be undone anyways, already undone, etc. Subsequent cancellation replaces the ID.
+
+**Final mutation score**: 89.12, **Mutation score without equivalents**: 97.04
