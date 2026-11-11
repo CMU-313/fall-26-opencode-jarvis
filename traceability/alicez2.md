@@ -51,3 +51,55 @@ A Stryker survivor I would have never thought of would be setting `sending` to t
 - Other iterations of leaving the most recently cancelled ID. Either it can't be undone anyways, already undone, etc. Subsequent cancellation replaces the ID.
 
 **Final mutation score**: 89.12, **Mutation score without equivalents**: 97.04
+
+## Agent failure case
+
+![alt text](image.png) ![alt text](image-1.png) ![alt text](image-2.png) ![alt text](image-3.png) ![alt text](image-4.png)
+Opencode kept giving code with syntax errors so I let Codex tidy it up but still keep what the property is doing. ![alt text](image-5.png)
+The property let H3 survive. The generator was too weak because it would only always cancel the latest queued follow-up, so restoring at the end would be the same as restoring at its "original position".
+Strengthened version:
+```ts
+const prompts = fc.array(fc.string({ maxLength: 80 }), { minLength: 1, maxLength: 12 })
+const cancellation = prompts.chain((items) =>
+  fc.record({
+    items: fc.constant(items),
+    index: fc.integer({ min: 0, max: items.length - 1 }),
+  }),
+)
+
+test("canceling and undoing any follow-up restores queue identity, content, and order", () => {
+  fc.assert(
+    fc.property(cancellation, ({ items, index }) => {
+      createRoot((dispose) => {
+        try {
+          const queue = createFollowupQueue({
+            status: () => "busy",
+            onError: (error) => {
+              throw error
+            },
+          })
+          items.forEach((text) => queue.add(text, async () => {}))
+          const before = queue.items.map((item) => ({ ...item }))
+          expect(queue.canUndo).toBe(false)
+          queue.cancel(before[index].id)
+          expect(queue.canUndo).toBe(true)
+          expect(queue.items.map((item) => item.id)).toEqual(
+            before.filter((_, position) => position !== index).map((item) => item.id),
+          )
+          queue.undo()
+          expect(queue.canUndo).toBe(false)
+          expect(queue.items.map((item) => item.id)).toEqual(before.map((item) => item.id))
+          expect(queue.items.map((item) => item.text)).toEqual(items)
+          queue.items.forEach((item, position) => expect(item.send).toBe(before[position].send))
+          queue.undo()
+          expect(queue.items.map((item) => item.id)).toEqual(before.map((item) => item.id))
+        } finally {
+          dispose()
+        }
+      })
+    }),
+    { numRuns: 200, timeout: 30000 },
+  )
+})
+```
+First one (weak) still survives, second (strengthened) kills the mutant. ![alt text](image-7.png)

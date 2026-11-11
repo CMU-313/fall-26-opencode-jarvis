@@ -9,3 +9,4 @@ packages/sdk/js/tsconfig.tsbuildinfo
 test-results/.last-run.json
 reports/
 .stryker-tmp/
+agent-followup-queue.property.test.ts
