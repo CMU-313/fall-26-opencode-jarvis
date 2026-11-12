@@ -1,0 +1,12 @@
+diff --git a/packages/opencode/src/snapshot/index.ts b/packages/opencode/src/snapshot/index.ts
+--- a/packages/opencode/src/snapshot/index.ts
++++ b/packages/opencode/src/snapshot/index.ts
+@@ -424,7 +424,7 @@
+ 
+               const single = Effect.fnUntraced(function* (op: (typeof ops)[number]) {
+                 yield* Effect.logInfo("reverting", { file: op.file, hash: op.hash })
+-                const result = yield* git([...core, ...args(["checkout", op.hash, "--", op.file])], {
++                const result = yield* git([...core, ...args(["restore", "--source", op.hash, "--staged", "--", op.file])], {
+                   cwd: state.worktree,
+                 })
+                 if (result.code === 0) return

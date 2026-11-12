@@ -1,0 +1,12 @@
+diff --git a/packages/opencode/src/snapshot/index.ts b/packages/opencode/src/snapshot/index.ts
+--- a/packages/opencode/src/snapshot/index.ts
++++ b/packages/opencode/src/snapshot/index.ts
+@@ -493,7 +493,7 @@
+                 if (list.length) {
+                   yield* Effect.logInfo("reverting", { hash: first.hash, files: list.length })
+                   const result = yield* git(
+-                    [...core, ...args(["checkout", first.hash, "--", ...list.map((item) => item.file)])],
++                    [...core, ...args(["checkout", first.hash, "--", list[0]!.file])],
+                     {
+                       cwd: state.worktree,
+                     },
