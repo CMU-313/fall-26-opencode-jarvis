@@ -8,9 +8,10 @@
 // deterministic and fast-check can shrink a failure to a minimal session.
 //
 // "Undo" is SessionRevert.revert on a turn's user message (what /undo and the
-// Revert option call), "redo" is SessionRevert.unrevert, and "send a new message"
-// is SessionRevert.cleanup, which SessionPrompt.prompt runs before admitting the
-// message.
+// Revert option call). "Redo" works like the TUI's /redo: it brings back one turn
+// by reverting to the next user message, and calls SessionRevert.unrevert when no
+// turn is left. "Send a new message" is SessionRevert.cleanup, which
+// SessionPrompt.prompt runs before admitting every message.
 import { afterEach, describe, expect } from "bun:test"
 import { $ } from "bun"
 import fc from "fast-check"
@@ -42,6 +43,9 @@ afterEach(async () => {
 // Each case runs ~20-40 git commands, so CI uses a modest run count. Set
 // PROPERTY_RUNS (e.g. 200) to stress-test locally.
 const RUNS = Number(process.env.PROPERTY_RUNS ?? 15)
+// Fixed seed so every run (CI, local, Stryker) sees the same generated cases.
+// Set PROPERTY_SEED to explore other cases.
+const SEED = Number(process.env.PROPERTY_SEED ?? 42)
 const TIMEOUT = 240_000
 
 // ---------------------------------------------------------------------------
@@ -55,7 +59,10 @@ const FILES = ["a.txt", "b.txt", "notes.md", "src/app.ts"] as const
 type File = (typeof FILES)[number]
 // null means the file does not exist.
 type State = Record<File, string | null>
-type Op = { file: File; content: string | null }
+// A write (null content = delete), or a move: the AI deletes `move` and writes
+// the same content to `to` in one turn, like `mv`. Git's rename detection treats
+// that pair specially, so it is generated on purpose (it kills mutant H2).
+type Op = { file: File; content: string | null } | { move: File; to: File }
 
 // Empty files, multi-line text and short random strings. Interviewees cared
 // about exact contents coming back (C-7, O-8), so small differences matter.
@@ -66,15 +73,27 @@ const content = fc.oneof(fc.constantFrom("", "v1", "v2", "line 1\nline 2\n"), fc
 const maybe = fc.option(content, { nil: null, freq: 4 })
 
 // The project before the session starts: each file is missing or has content.
+// Each file is missing half the time, so turns often create new files, which
+// the AI does all the time. (With 1 in 4 missing, few undone turns created a
+// file, and Stryker mutants 208, 210, 216 and 218 survived.)
+const missing = fc.option(content, { nil: null, freq: 2 })
 const initial: fc.Arbitrary<State> = fc.record({
-  "a.txt": maybe,
-  "b.txt": maybe,
-  "notes.md": maybe,
-  "src/app.ts": maybe,
+  "a.txt": missing,
+  "b.txt": missing,
+  "notes.md": missing,
+  "src/app.ts": missing,
 })
 
-// One AI turn writes, creates or deletes 1-3 files (null content = delete).
-const turn = fc.array(fc.record({ file: fc.constantFrom(...FILES), content: maybe }), { minLength: 1, maxLength: 3 })
+// One AI turn writes, creates, deletes or moves 0-3 files. Zero is a turn where
+// the AI only answers, the most common kind, which records no patch. Random
+// writes almost never delete one file and recreate its exact content elsewhere,
+// so moves get their own generator.
+const write: fc.Arbitrary<Op> = fc.record({ file: fc.constantFrom(...FILES), content: maybe })
+const move: fc.Arbitrary<Op> = fc.record({ move: fc.constantFrom(...FILES), to: fc.constantFrom(...FILES) })
+const turn = fc.array(fc.oneof({ arbitrary: write, weight: 3 }, { arbitrary: move, weight: 1 }), {
+  minLength: 0,
+  maxLength: 3,
+})
 
 // 1-4 turns, and which turn to undo back to (0 = the first turn). Jumping back
 // several turns at once is what choosing Revert on an earlier message does.
@@ -99,10 +118,10 @@ const property = <T, E, R>(name: string, arb: fc.Arbitrary<T>, run: (input: T) =
     yield* Effect.promise(() =>
       fc.assert(
         fc.asyncProperty(arb, (input) => runCase(run(input))),
-        { numRuns: RUNS },
+        { numRuns: RUNS, seed: SEED },
       ),
     )
-    console.log(`[property] ${name}: passed ${RUNS} generated cases`)
+    console.log(`[property] ${name}: passed ${RUNS} generated cases (seed ${SEED})`)
   })
 
 // A fresh git project per case, deleted when the case ends.
@@ -125,6 +144,17 @@ const read = (dir: string) =>
     return Object.fromEntries(entries) as State
   })
 
+// Applies one AI file operation. A move of a missing file, or onto itself, does nothing.
+const apply = (dir: string, op: Op) =>
+  "move" in op
+    ? Effect.gen(function* () {
+        const value = (yield* read(dir))[op.move]
+        if (value === null || op.move === op.to) return
+        yield* put(dir, op.to, value)
+        yield* put(dir, op.move, null)
+      })
+    : put(dir, op.file, op.content)
+
 const git = (dir: string, args: string[]) => Effect.promise(() => $`git ${args}`.cwd(dir).quiet().text())
 
 const messageIDs = (sessionID: SessionID) =>
@@ -145,6 +175,7 @@ const replay = Effect.fn("test.replay")(function* (dir: string, input: { initial
   yield* Effect.forEach(FILES, (file) => put(dir, file, input.initial[file]))
   const info = yield* sessions.create({})
   const users: MessageID[] = []
+  const replies: MessageID[] = []
   const before: State[] = []
   for (const [index, ops] of input.turns.entries()) {
     before.push(yield* read(dir))
@@ -180,7 +211,7 @@ const replay = Effect.fn("test.replay")(function* (dir: string, input: { initial
     })
     const start = yield* snapshot.track()
     if (!start) return yield* Effect.die(new Error("snapshots are off"))
-    yield* Effect.forEach(ops, (op) => put(dir, op.file, op.content))
+    yield* Effect.forEach(ops, (op) => apply(dir, op))
     const end = yield* snapshot.track()
     const patch = yield* snapshot.patch(start)
     yield* sessions.updatePart({
@@ -211,8 +242,25 @@ const replay = Effect.fn("test.replay")(function* (dir: string, input: { initial
         files: patch.files,
       })
     users.push(user.id)
+    replies.push(assistant.id)
   }
-  return { sessionID: info.id, users, before, after: yield* read(dir) }
+  return { sessionID: info.id, users, replies, before, after: yield* read(dir) }
+})
+
+// What /redo does in packages/tui/src/routes/session/index.tsx: revert to the
+// next user message after the undo point, which brings back one turn, or
+// unrevert when there is none.
+const redo = Effect.fn("test.redo")(function* (sessionID: SessionID, users: MessageID[]) {
+  const sessions = yield* Session.Service
+  const revert = yield* SessionRevert.Service
+  const point = (yield* sessions.get(sessionID)).revert?.messageID
+  if (!point) return
+  const next = users.find((id) => id > point)
+  if (next) {
+    yield* revert.revert({ sessionID, messageID: next })
+    return
+  }
+  yield* revert.unrevert({ sessionID })
 })
 
 // Files whose content differs between two states.
@@ -229,7 +277,10 @@ const changedSince = (from: number, before: State[], after: State) =>
 describe("session undo/redo properties", () => {
   // R1: Undoing and then redoing should put your files and chat back exactly how
   // they were before the undo.
-  // Kind: round-trip
+  // Kind: round-trip. Undo back to a turn, then /redo once per undone turn. Each
+  // /redo brings back one turn, so the files match the state before the next
+  // undone turn, and the last one returns to the state before the undo. (P4 only
+  // checked one unrevert. Stepwise /redo was added in P5 after Stryker mutant 77.)
   it.live(
     "R1 (round-trip): undo then redo restores every file and the same messages",
     () =>
@@ -242,9 +293,11 @@ describe("session undo/redo properties", () => {
             const messages = yield* messageIDs(run.sessionID)
 
             yield* revert.revert({ sessionID: run.sessionID, messageID: run.users[input.undo] })
-            yield* revert.unrevert({ sessionID: run.sessionID })
+            for (const state of [...run.before.slice(input.undo + 1), run.after]) {
+              yield* redo(run.sessionID, run.users)
+              expect(yield* read(dir)).toEqual(state)
+            }
 
-            expect(yield* read(dir)).toEqual(run.after)
             expect(yield* messageIDs(run.sessionID)).toEqual(messages)
             expect((yield* sessions.get(run.sessionID)).revert).toBeUndefined()
           }),
@@ -350,7 +403,9 @@ describe("session undo/redo properties", () => {
 
   // R4: If you send a new message after undoing, the undone messages are gone and
   // you can't redo them.
-  // Kind: invariant
+  // Kind: invariant. Sending a message runs cleanup every time, so a second
+  // message, with nothing undone, must delete nothing more (added in P5 after
+  // Stryker mutant 91).
   it.live(
     "R4 (invariant): a new message after undo deletes the undone turns and redo does nothing",
     () =>
@@ -378,6 +433,10 @@ describe("session undo/redo properties", () => {
 
               expect(yield* read(dir)).toEqual(files)
               expect(yield* messageIDs(run.sessionID)).toEqual(kept)
+
+              yield* revert.cleanup(yield* sessions.get(run.sessionID))
+
+              expect(yield* messageIDs(run.sessionID)).toEqual(kept)
             }),
           ),
       ),
@@ -388,13 +447,20 @@ describe("session undo/redo properties", () => {
   // two turns back.
   // Kind: metamorphic. Same session replayed in two projects: one undoes `times`
   // turns one at a time (what repeated /undo does), the other jumps straight to
-  // that turn with Revert. Generalizes "twice" to 1-4 times.
+  // that turn with Revert. Generalizes "twice" to 1-4 times. "The same place"
+  // includes what redo brings back, so both then redo and must return to the
+  // state before any undo (added in P5 after mutant H6). The direct Revert is on
+  // either the user message or the AI's reply to it. The TUI only offers Revert
+  // on your own messages, but the server accepts any message, and both must land
+  // in the same place (added in P5 after Stryker mutants 22-25 and 67-69).
   it.live(
     "R5 (metamorphic): undoing N times one by one equals one Revert N turns back",
     () =>
       property(
         "R5 (metamorphic): undoing N times one by one equals one Revert N turns back",
-        session.chain((s) => fc.record({ ...mapConst(s), times: fc.integer({ min: 1, max: s.turns.length }) })),
+        session.chain((s) =>
+          fc.record({ ...mapConst(s), times: fc.integer({ min: 1, max: s.turns.length }), reply: fc.boolean() }),
+        ),
         (input) =>
           Effect.gen(function* () {
             const stepwise = yield* withProject((dir) =>
@@ -408,7 +474,14 @@ describe("session undo/redo properties", () => {
                   .slice(0, input.times))
                   yield* revert.revert({ sessionID: run.sessionID, messageID: run.users[index] })
                 const point = (yield* sessions.get(run.sessionID)).revert?.messageID
-                return { files: yield* read(dir), point: run.users.findIndex((id) => id === point) }
+                const files = yield* read(dir)
+                yield* revert.unrevert({ sessionID: run.sessionID })
+                return {
+                  files,
+                  point: run.users.findIndex((id) => id === point),
+                  redone: yield* read(dir),
+                  after: run.after,
+                }
               }),
             )
             const direct = yield* withProject((dir) =>
@@ -416,12 +489,24 @@ describe("session undo/redo properties", () => {
                 const sessions = yield* Session.Service
                 const revert = yield* SessionRevert.Service
                 const run = yield* replay(dir, input)
-                yield* revert.revert({ sessionID: run.sessionID, messageID: run.users[run.users.length - input.times] })
+                const target = run.users.length - input.times
+                yield* revert.revert({
+                  sessionID: run.sessionID,
+                  messageID: input.reply ? run.replies[target] : run.users[target],
+                })
                 const point = (yield* sessions.get(run.sessionID)).revert?.messageID
-                return { files: yield* read(dir), point: run.users.findIndex((id) => id === point) }
+                const files = yield* read(dir)
+                yield* revert.unrevert({ sessionID: run.sessionID })
+                return {
+                  files,
+                  point: run.users.findIndex((id) => id === point),
+                  redone: yield* read(dir),
+                  after: run.after,
+                }
               }),
             )
             expect(stepwise).toEqual(direct)
+            expect(stepwise.redone).toEqual(stepwise.after)
           }),
       ),
     TIMEOUT,

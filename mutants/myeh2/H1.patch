@@ -1,0 +1,13 @@
+diff --git a/packages/opencode/src/snapshot/index.ts b/packages/opencode/src/snapshot/index.ts
+index 2390480..aafae46 100644
+--- a/packages/opencode/src/snapshot/index.ts
++++ b/packages/opencode/src/snapshot/index.ts
+@@ -417,7 +417,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
+               // snapshot, so redo removes a file the AI had deleted (undo brings it
+               // back first). checkout-index below still writes every snapshot file,
+               // including ones that are missing from disk but unchanged in the index.
+-              const result = yield* git([...core, ...args(["read-tree", "--reset", "-u", snapshot])], {
++              const result = yield* git([...core, ...args(["read-tree", snapshot])], {
+                 cwd: state.worktree,
+               })
+               if (result.code === 0) {

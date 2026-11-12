@@ -1,0 +1,17 @@
+diff --git a/packages/opencode/src/session/revert.ts b/packages/opencode/src/session/revert.ts
+index 2486b0d..e128ddd 100644
+--- a/packages/opencode/src/session/revert.ts
++++ b/packages/opencode/src/session/revert.ts
+@@ -71,10 +71,8 @@ const layer = Layer.effect(
+         for (const part of msg.parts) {
+           if (part.type === "step-start") after = undefined
+           if (part.type === "step-finish") after = part.snapshot
+-          if (rev) {
+-            if (part.type === "patch") steps.push({ patch: part, after })
+-            continue
+-          }
++          if (part.type === "patch") steps.push({ patch: part, after })
++          if (rev) continue
+ 
+           if (!rev) {
+             if ((msg.info.id === input.messageID && !input.partID) || part.id === input.partID) {
