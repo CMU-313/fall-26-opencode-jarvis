@@ -14,7 +14,7 @@ All properties are in [`packages/opencode/test/session/undo-redo.property.test.t
 | R4 | C-8, S-10, O-9: "once u do something new the redo should not be available" | If you send a new message after undoing, the undone messages are gone and you can't redo them. | After /undo, you send "hello". The undone messages are deleted, /redo is disabled, and running /redo doesn't change anything. | No | For any session and undo point, sending a new message deletes exactly the undone turns, clears the redo state (what disables /redo), and a later redo changes no files or messages. A second message, with nothing undone, deletes nothing more (invariant). | [R4 (invariant): a new message after undo deletes the undone turns and redo does nothing](../packages/opencode/test/session/undo-redo.property.test.ts#L404) | H5, Stryker 91 |
 | R5 | C-10, O-10, O-11, S-12: "i’d be confused about which is the “real” undo if they were different" | Undoing twice should end up in the same place as reverting to the message two turns back. | Three turns change a.txt to "v1", "v2", then "v3". Running /undo twice and choosing Revert on the second message both leave a.txt as "v1", with only the first turn showing. | No | The same session replayed twice: undoing N times one at a time, and choosing Revert N turns back (on the user message or the AI's reply to it), end with the same files and the same revert point, and redo takes both back to the start, for N = 1 to 4 (metamorphic). | [R5 (metamorphic): undoing N times one by one equals one Revert N turns back](../packages/opencode/test/session/undo-redo.property.test.ts#L446) | H1, H6, Stryker 22, 23, 25, 67, 69 |
 
-Properties written or suggested by opencode or another AI tool: R1, R2, R3, R4, R5. All six properties and their generators were drafted with Claude (an AI assistant), as were the code fixes and the P5 changes below. I reviewed each one against its requirement and acceptance criteria.
+Properties written or suggested by opencode or another AI tool: R1, R2, R3, R4, R5. All six properties and their generators were drafted with Claude (an AI assistant), as were the code fixes and the P5 changes below. I reviewed each one against its requirement and acceptance criteria. The extra R1 property in the [Agent failure case](#agent-failure-case) was written by opencode, then strengthened.
 
 "Mutants it kills" lists my hand-written mutants (H1–H6) and the Stryker mutants that survived an earlier Stryker run and that I targeted afterwards. I ran each of these against all six properties without stopping at the first failure (15 cases, seed 42, as in CI). Stryker runs with `--bail`, so it doesn't record which property killed each of its other mutants.
 
@@ -109,4 +109,97 @@ None of these are equivalent. Each needs a situation my generators never create:
 
 ## Agent failure case
 
-TODO: added in a follow-up commit.
+**The property.** I asked opencode (build mode, GPT-5.6 Luna) to write its own property for R1, without reading my property file. It wrote [`undo-redo.agent.property.test.ts`](../packages/opencode/test/session/undo-redo.agent.property.test.ts). The commit that adds this file has opencode's version exactly as it wrote it, and the commit after it strengthens it. I made a `/share` link, but opencode no longer hosts shared sessions (the link now says "This link and its content are no longer available"), so the prompt and reply are pasted below, with screenshots.
+
+Prompt I sent:
+
+```
+Write a fast-check property-based test for this requirement, in
+packages/opencode/test/session/undo-redo.agent.property.test.ts.
+
+R1: Undoing and then redoing should put your files and chat back exactly
+how they were before the undo. Acceptance criteria: the AI changes a.txt
+from "v1" to "v2" and creates b.txt. After /undo, a.txt says "v1" and b.txt
+is gone. After /redo, a.txt says "v2", b.txt is back, and the chat shows the
+same messages as before.
+
+The undo/redo code is in packages/opencode/src/session/revert.ts and
+packages/opencode/src/snapshot/index.ts, and /undo and /redo are in
+packages/tui/src/routes/session/index.tsx. See
+test/session/revert-compact.test.ts for how tests record AI turns.
+
+I want an independent property, so do not read
+test/session/revert.property.test.ts or test/session/undo-redo.property.test.ts,
+and do not read anything in traceability/ or mutants/.
+
+Each case creates a git repo, so keep the default number of cases small
+enough to run in a few minutes. Run it from packages/opencode with
+bun test test/session/undo-redo.agent.property.test.ts until it passes.
+Don't change any other file and don't commit.
+```
+
+opencode's final reply:
+
+> Added `packages/opencode/test/session/undo-redo.agent.property.test.ts`.
+>
+> - Uses fast-check with 3 git-backed cases.
+> - Verifies undo restores files and redo restores files plus identical chat.
+> - Only the requested file changed.
+> - Test passes: 1 pass, 0 fail.
+>
+> Build · GPT-5.6 Luna · 8m 23s
+
+Screenshots: [prompt](../mutants/myeh2/opencode-prompt.png), [reply](../mutants/myeh2/opencode-reply.png).
+
+The parts of opencode's property that matter (`numRuns: 3`):
+
+```ts
+fc.record({
+  prompt: fc.constantFrom("change the files", "make the requested edit", "update the project"),
+  response: fc.constantFrom("Done", "I changed the files", "The requested edit is complete"),
+}),
+// ...
+yield* Effect.promise(() => fs.writeFile(path.join(dir, "a.txt"), "v1"))
+// ... user message, AI reply, step-start snapshot ...
+yield* Effect.promise(() => fs.writeFile(path.join(dir, "a.txt"), "v2"))
+yield* Effect.promise(() => fs.writeFile(path.join(dir, "b.txt"), "created by the agent"))
+// ... step-finish snapshot and patch ...
+yield* revert.revert({ sessionID: info.id, messageID: user.id })
+expect(yield* read(path.join(dir, "a.txt"))).toBe("v1")
+expect(yield* Effect.promise(() => Bun.file(path.join(dir, "b.txt")).exists())).toBe(false)
+
+yield* revert.unrevert({ sessionID: info.id })
+expect(yield* read(path.join(dir, "a.txt"))).toBe("v2")
+expect(yield* read(path.join(dir, "b.txt"))).toBe("created by the agent")
+expect(yield* session.messages({ sessionID: info.id })).toEqual(beforeUndo)
+```
+
+**The mutant it let survive: H1.** opencode's property passes against every mutant I ran it on: H1–H6 and Stryker 77, 142, 208, 210, 216 and 218. H1 matters most, because it puts back the real bug my R1 property found in P4. `Snapshot.restore` runs plain `git read-tree` instead of `read-tree --reset -u`, so redo writes back the files the AI changed but never deletes a file the AI deleted:
+
+```diff
+-              const result = yield* git([...core, ...args(["read-tree", "--reset", "-u", snapshot])], {
++              const result = yield* git([...core, ...args(["read-tree", snapshot])], {
+```
+
+**Why the property was too weak.** Its generator randomizes the wrong thing. The only random inputs are the prompt and reply text, which undo never looks at. The files and what the AI does to them are fixed: `a.txt` goes from "v1" to "v2" and `b.txt` is created, which is the acceptance-criteria example copied into the test. So all 3 runs check the same file changes, and the property is really one example test. That example never deletes a file, so H1 can't show up. It also has one AI turn and one undo, so the mutants that need two undone turns (H3, H4) or a redo that goes through `revert` (H6, 77) can't show up either. This is the "generator that misses the bug" kind of weakness: the inputs are too narrow. opencode also only ran `bun test`. The untyped `Effect.context()` makes `bun typecheck` fail.
+
+**Strengthened version** ([same file](../packages/opencode/test/session/undo-redo.agent.property.test.ts)). It keeps opencode's chat-text generator and the way it records an AI turn, and changes three things:
+
+- The generator now makes the starting files (any of `a.txt`, `b.txt` and `src/c.ts` can be missing or have content) and 1–3 AI turns. Each turn writes or deletes any of those files, or changes nothing. The property undoes back to a random turn and checks that every file matches what it was right before that turn.
+- Redo works like the TUI's `/redo`. While there is a later user message, it reverts to it, which brings back one turn, and checks the files match that point. It only calls `unrevert` once none is left. At the end, every file and the message list must be exactly as before the undo.
+- It runs 10 cases with a fixed seed (42), and the context is typed, so typecheck passes.
+
+**Evidence.** I ran the same mutants against both versions. opencode's version has no seed, but its only random inputs are the chat text, so its result is the same for any seed. Both versions pass on the real code.
+
+| Mutant | opencode's property | Strengthened (seed 42, 10 cases) |
+|---|---|---|
+| H1 | Survived | Killed. Counterexample: `a.txt` is "v1", the first AI turn deletes it, and the second changes nothing. After undoing both turns, the first `/redo` should bring back the deletion, but `a.txt` is back as "v1". |
+| H3 | Survived | Killed |
+| H4 | Survived | Killed |
+| H6 | Survived | Killed |
+| Stryker 77 | Survived | Killed |
+| Stryker 142, 208, 210, 216, 218 | Survived | Killed |
+| H2 | Survived | Survived. It needs a turn that moves a file (deletes it and writes the same content to another file), and none of the 10 cases does. My R1 (model) property kills it with a "move" operation. |
+| H5 | Survived | Survived. It breaks sending a new message after an undo, which is R4, not R1. |
+
+The strengthened version kills 10 of the 12 mutants. opencode's version killed none.
