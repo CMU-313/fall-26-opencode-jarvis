@@ -1,0 +1,13 @@
+diff --git a/packages/tui/src/prompt/followup-queue.ts b/packages/tui/src/prompt/followup-queue.ts
+index f8f1373..87669c1 100644
+--- a/packages/tui/src/prompt/followup-queue.ts
++++ b/packages/tui/src/prompt/followup-queue.ts
+@@ -39,7 +39,7 @@ export function createFollowupQueue(input: { status: Accessor<string>; onError:
+   // Also re-runs when `sending` clears: the prompt request resolves only after its turn ends,
+   // which can be after the session already reported idle.
+   createEffect(() => {
+-    const next = nextQueuedFollowup(input.status(), sending() || failed(), items)
++    const next = nextQueuedFollowup(input.status(), failed(), items)
+     if (!next) return
+     setSending(true)
+     setItems((list) => list.slice(1))
