@@ -212,7 +212,9 @@ function createHarness() {
   const turns: { resolve: () => void; reject: (error: Error) => void }[] = []
   let nextSubmission = 0
   return {
-    items: queue.items,
+    get items() {
+      return queue.items
+    },
     cancel: queue.cancel,
     cancelLatest: queue.cancelLatest,
     status,
