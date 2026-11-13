@@ -1,8 +1,9 @@
 // Property-based tests for /undo file restoration.
-// Requirements R1–R4 are documented in traceability/ritax.md.
+// Requirements R1–R4 and R6 are documented in traceability/ritax.md.
 // Each generated case uses real session services and a fresh temporary Git workspace.
 import { describe, expect } from "bun:test"
 import fc from "fast-check"
+import { parsePatch } from "diff"
 import path from "node:path"
 import { Effect, Layer } from "effect"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -14,10 +15,18 @@ import { Session } from "../../src/session/session"
 import { SessionRevert } from "../../src/session/revert"
 import { MessageID, PartID } from "../../src/session/schema"
 import { Snapshot } from "../../src/snapshot"
+import { Storage } from "../../src/storage/storage"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 const layer = LayerNode.compile(
-  LayerNode.group([Session.node, SessionRevert.node, Snapshot.node, SessionProjector.node, CrossSpawnSpawner.node]),
+  LayerNode.group([
+    Session.node,
+    SessionRevert.node,
+    Snapshot.node,
+    Storage.node,
+    SessionProjector.node,
+    CrossSpawnSpawner.node,
+  ]),
 )
 const it = testEffect(layer)
 // Override locally for stress runs; CI keeps 20 cases unless explicitly configured.
@@ -28,7 +37,7 @@ if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error("PROPERTY_TIM
 
 // Generators
 // Empty files, Unicode and newline differences check exact restoration (R1).
-// R2 varies manual and AI edits separately; R3 combines two edits with 1–3 new files.
+// R2 varies the timing of manual edits. R3 includes a second assistant step.
 const contents = fc.oneof(
   fc.constantFrom("", "Hello, Rita!", "Hello, world!", "你好 👋", "\n", "a\nb", "a\nb\n"),
   fc.string({ maxLength: 80 }),
@@ -67,11 +76,15 @@ describe("session undo properties", () => {
   // Kind: invariant.
   it.live(
     "R2: undo preserves separate manual edits",
-    property("R2", fc.record({ manual: edit, ai: edit }), (h, value) =>
+    property("R2", fc.record({ manual: edit, ai: edit, manualAfterAI: fc.boolean() }), (h, value) =>
       Effect.gen(function* () {
         yield* h.write({ "fileA.txt": value.manual.before, "fileB.txt": value.ai.before })
-        yield* h.write({ "fileA.txt": value.manual.after })
-        const boundary = yield* h.turn({ "fileB.txt": value.ai.after })
+        const manual = { "fileA.txt": value.manual.after }
+        if (!value.manualAfterAI) yield* h.write(manual)
+        // A text-only turn has no affected paths. Undo across it and the following edit.
+        const boundary = yield* h.turn({})
+        yield* h.turn({ "fileB.txt": value.ai.after })
+        if (value.manualAfterAI) yield* h.write(manual)
         expect(yield* h.read("fileB.txt")).toBe(value.ai.after)
         yield* h.undo(boundary)
         expect(yield* h.read("fileA.txt")).toBe(value.manual.after)
@@ -90,6 +103,7 @@ describe("session undo properties", () => {
         first: edit,
         second: edit,
         created: fc.array(contents, { minLength: 1, maxLength: 3 }),
+        followUp: contents,
       }),
       (h, value) =>
         Effect.gen(function* () {
@@ -97,15 +111,16 @@ describe("session undo properties", () => {
           yield* h.write(original)
           const created = Object.fromEntries(value.created.map((text, index) => [`notes-${index}.txt`, text]))
           const changed = { "greetings.txt": value.first.after, "existing.txt": value.second.after, ...created }
-          const boundary = yield* h.turn(changed)
-          yield* Effect.forEach(Object.entries(changed), ([name, text]) =>
+          const followUp = { "follow-up.txt": value.followUp }
+          const boundary = yield* h.turn(changed, followUp)
+          yield* Effect.forEach(Object.entries({ ...changed, ...followUp }), ([name, text]) =>
             h.read(name).pipe(Effect.map((actual) => expect(actual).toBe(text))),
           )
           yield* h.undo(boundary)
           yield* Effect.forEach(Object.entries(original), ([name, text]) =>
             h.read(name).pipe(Effect.map((actual) => expect(actual).toBe(text))),
           )
-          yield* Effect.forEach(Object.keys(created), (name) =>
+          yield* Effect.forEach(Object.keys({ ...created, ...followUp }), (name) =>
             h.read(name).pipe(Effect.map((actual) => expect(actual).toBeNull())),
           )
         }),
@@ -120,20 +135,47 @@ describe("session undo properties", () => {
     "R4: one revert restores a selected earlier workspace",
     property("R4", history, (h, value) =>
       Effect.gen(function* () {
-        yield* h.write({ "greetings.txt": "initial" })
+        yield* h.write({ "src/greetings.txt": "initial" })
         const states = value.texts.map((text, index) => `${index}: ${text}`)
         const boundaries = yield* Effect.forEach(states, (text, index) =>
-          h.turn({ "greetings.txt": text, [`turn-${index}.txt`]: text }),
+          h.turn({ "src/greetings.txt": text, [`notes/turn-${index}.txt`]: text }),
         )
-        expect(yield* h.read("greetings.txt")).toBe(states[states.length - 1]!)
+        expect(yield* h.read("src/greetings.txt")).toBe(states[states.length - 1]!)
         // To retain target interactions, revert from the first excluded user message.
         yield* h.undo(boundaries[value.target]!)
-        expect(yield* h.read("greetings.txt")).toBe(states[value.target - 1]!)
+        expect(yield* h.read("src/greetings.txt")).toBe(states[value.target - 1]!)
         yield* Effect.forEach(states, (text, index) =>
           h
-            .read(`turn-${index}.txt`)
+            .read(`notes/turn-${index}.txt`)
             .pipe(Effect.map((actual) => expect(actual).toBe(index < value.target ? text : null))),
         )
+      }),
+    ),
+    timeout,
+  )
+
+  it.live(
+    "R6: undo summary includes the final interaction's changed file and line",
+    property("R6", fc.record({ edit, line: fc.integer({ min: 1, max: 8 }) }), (h, value) =>
+      Effect.gen(function* () {
+        const prefix = "unchanged\n".repeat(value.line - 1)
+        const before = `before ${JSON.stringify(value.edit.before)}`
+        const after = `after ${JSON.stringify(value.edit.after)}`
+        yield* h.write({ "final.txt": `${prefix}${before}\n` })
+        const boundary = yield* h.turn({ "earlier.txt": "earlier change\n" })
+        yield* h.turn({ "final.txt": `${prefix}${after}\n` })
+        yield* h.undo(boundary)
+
+        const summary = yield* h.summary()
+        expect(summary.map((file) => file.file).sort()).toEqual(["earlier.txt", "final.txt"])
+        const final = summary.find((file) => file.file === "final.txt")
+        expect(final).toMatchObject({ status: "modified", additions: 1, deletions: 1 })
+        const [hunk] = parsePatch(final?.patch ?? "")[0]?.hunks ?? []
+        if (!hunk) throw new Error("Expected a patch hunk for final.txt")
+        expect(hunk.lines).toContain(`-${before}`)
+        expect(hunk.lines).toContain(`+${after}`)
+        expect(hunk.oldStart + hunk.lines.indexOf(`-${before}`)).toBe(value.line)
+        expect(hunk.newStart + hunk.lines.indexOf(`+${after}`) - 1).toBe(value.line)
       }),
     ),
     timeout,
@@ -160,7 +202,7 @@ function property<A>(
             ).pipe(Effect.scoped),
           ),
         ),
-        { numRuns: runs },
+        { numRuns: runs, seed: 42 },
       ),
     )
     // The package uses --only-failures; keep successful properties visible in CI.
@@ -173,6 +215,7 @@ function harness(dir: string) {
     const session = yield* Session.Service
     const snapshot = yield* Snapshot.Service
     const revert = yield* SessionRevert.Service
+    const storage = yield* Storage.Service
     const info = yield* session.create({})
     const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
     const write = (files: Record<string, string>) =>
@@ -184,7 +227,7 @@ function harness(dir: string) {
         const file = Bun.file(path.join(dir, name))
         return (await file.exists()) ? file.text() : null
       })
-    const turn = (files: Record<string, string>) =>
+    const turn = (files: Record<string, string>, ...laterSteps: Record<string, string>[]) =>
       Effect.gen(function* () {
         const user = yield* session.updateMessage({
           id: MessageID.ascending(),
@@ -216,43 +259,52 @@ function harness(dir: string) {
           time: { created: Date.now() },
           finish: "end_turn",
         })
-        const before = yield* snapshot.track()
-        if (!before) throw new Error("Expected initial snapshot")
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID: info.id,
-          messageID: assistant.id,
-          type: "step-start",
-          snapshot: before,
-        })
-        yield* write(files)
-        const after = yield* snapshot.track()
-        if (!after) throw new Error("Expected post-edit snapshot")
-        const patch = yield* snapshot.patch(before)
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID: info.id,
-          messageID: assistant.id,
-          type: "step-finish",
-          snapshot: after,
-          reason: "stop",
-          cost: 0,
-          tokens,
-        })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID: info.id,
-          messageID: assistant.id,
-          type: "patch",
-          hash: patch.hash,
-          files: patch.files,
-        })
+        yield* Effect.forEach(
+          [files, ...laterSteps],
+          (stepFiles) =>
+            Effect.gen(function* () {
+              const before = yield* snapshot.track()
+              if (!before) throw new Error("Expected initial snapshot")
+              yield* session.updatePart({
+                id: PartID.ascending(),
+                sessionID: info.id,
+                messageID: assistant.id,
+                type: "step-start",
+                snapshot: before,
+              })
+              yield* write(stepFiles)
+              const after = yield* snapshot.track()
+              if (!after) throw new Error("Expected post-edit snapshot")
+              const patch = yield* snapshot.patch(before)
+              yield* session.updatePart({
+                id: PartID.ascending(),
+                sessionID: info.id,
+                messageID: assistant.id,
+                type: "step-finish",
+                snapshot: after,
+                reason: "stop",
+                cost: 0,
+                tokens,
+              })
+              if (!patch.files.length) return
+              yield* session.updatePart({
+                id: PartID.ascending(),
+                sessionID: info.id,
+                messageID: assistant.id,
+                type: "patch",
+                hash: patch.hash,
+                files: patch.files,
+              })
+            }),
+          { discard: true },
+        )
         return user.id
       })
     return {
       write,
       read,
       turn,
+      summary: () => storage.read<Snapshot.FileDiff[]>(["session_diff", info.id]),
       undo: (messageID: MessageID) => revert.revert({ sessionID: info.id, messageID }).pipe(Effect.as(undefined)),
     }
   })
