@@ -1,0 +1,13 @@
+diff --git a/packages/opencode/src/snapshot/index.ts b/packages/opencode/src/snapshot/index.ts
+index 2390480..5262c2b 100644
+--- a/packages/opencode/src/snapshot/index.ts
++++ b/packages/opencode/src/snapshot/index.ts
+@@ -357,7 +357,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
+               const result = yield* git(
+                 [
+                   ...quote,
+-                  ...args(["diff", "--cached", "--no-ext-diff", "--no-renames", "--name-only", hash, "--", "."]),
++                  ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", "."]),
+                 ],
+                 {
+                   cwd: state.directory,

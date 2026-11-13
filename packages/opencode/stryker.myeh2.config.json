@@ -1,0 +1,31 @@
+{
+  "$schema": "../../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "PROPERTY_RUNS=5 PROPERTY_SEED=42 bun test --bail --timeout 240000 ./test/session/undo-redo.property.test.ts"
+  },
+  "mutate": [
+    "src/session/revert.ts:45-54",
+    "src/session/revert.ts:57-99",
+    "src/session/revert.ts:120-125",
+    "src/session/revert.ts:129-150",
+    "src/snapshot/index.ts:353-353",
+    "src/snapshot/index.ts:357-366",
+    "src/snapshot/index.ts:368-374",
+    "src/snapshot/index.ts:377-384",
+    "src/snapshot/index.ts:394-398",
+    "src/snapshot/index.ts:400-407",
+    "src/snapshot/index.ts:420-427",
+    "src/snapshot/index.ts:447-461",
+    "src/snapshot/index.ts:463-470",
+    "src/snapshot/index.ts:475-475",
+    "src/snapshot/index.ts:478-509",
+    "src/snapshot/index.ts:514-529",
+    "src/snapshot/index.ts:531-537",
+    "src/snapshot/index.ts:542-551",
+    "src/snapshot/index.ts:553-557"
+  ],
+  "coverageAnalysis": "off",
+  "reporters": ["html", "clear-text", "progress"],
+  "concurrency": 2
+}
