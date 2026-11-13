@@ -1,0 +1,12 @@
+diff --git a/packages/tui/src/context/delivery.tsx b/packages/tui/src/context/delivery.tsx
+--- a/packages/tui/src/context/delivery.tsx
++++ b/packages/tui/src/context/delivery.tsx
+@@ -4,7 +4,7 @@
+ export type DeliveryMode = "steer" | "queue"
+ 
+ export function nextDeliveryMode(mode: DeliveryMode): DeliveryMode {
+-  return mode === "steer" ? "queue" : "steer"
++  return mode === "queue" ? "queue" : "steer"
+ }
+ 
+ export const { use: useDelivery, provider: DeliveryProvider } = createSimpleContext({

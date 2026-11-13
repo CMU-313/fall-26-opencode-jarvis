@@ -1,0 +1,12 @@
+diff --git a/packages/tui/src/prompt/followup-queue.ts b/packages/tui/src/prompt/followup-queue.ts
+--- a/packages/tui/src/prompt/followup-queue.ts
++++ b/packages/tui/src/prompt/followup-queue.ts
+@@ -62,7 +62,7 @@
+       setItems((list) => cancelQueuedFollowup(list, id))
+     },
+     cancelLatest() {
+-      setItems((list) => list.slice(0, -1))
++      setItems((list) => list.slice(1))
+     },
+   }
+ }
