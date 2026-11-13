@@ -17,6 +17,8 @@ export const RevertInput = Schema.Struct({
 })
 export type RevertInput = Schema.Schema.Type<typeof RevertInput>
 
+type Step = { patch: Snapshot.Patch; after: string | undefined }
+
 export interface Interface {
   readonly revert: (input: RevertInput) => Effect.Effect<Session.Info, Session.BusyError>
   readonly unrevert: (input: { sessionID: SessionID }) => Effect.Effect<Session.Info, Session.BusyError>
@@ -35,6 +37,22 @@ const layer = Layer.effect(
     const summary = yield* SessionSummary.Service
     const state = yield* SessionRunState.Service
 
+    // Files the user edited by hand after the AI's last change to them: their
+    // content in `current` differs from the snapshot taken right after that AI
+    // step. Undo leaves these files as they are so the user's own work is kept.
+    // A step without a finish snapshot (an interrupted turn) can't be checked,
+    // so its files are restored as before.
+    const editedByHand = Effect.fnUntraced(function* (steps: Step[], current: string) {
+      const last = new Map(steps.flatMap((step) => step.patch.files.map((file) => [file, step.after] as const)))
+      const afters = [...new Set([...last.values()].filter((value): value is string => !!value))]
+      const differs = new Map(
+        yield* Effect.forEach(afters, (value) =>
+          snap.changed(value, current).pipe(Effect.map((files) => [value, new Set(files)] as const)),
+        ),
+      )
+      return new Set([...last].filter(([file, value]) => value && differs.get(value)?.has(file)).map(([file]) => file))
+    })
+
     const revert = Effect.fn("SessionRevert.revert")(function* (input: RevertInput) {
       yield* state.assertNotBusy(input.sessionID)
       const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
@@ -42,13 +60,19 @@ const layer = Layer.effect(
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
 
       let rev: Session.Info["revert"]
-      const patches: Snapshot.Patch[] = []
+      const steps: Step[] = []
+      // Snapshot taken when the current AI step finished; the processor stores it
+      // on the step-finish part right before that step's patch part.
+      let after: string | undefined
       for (const msg of all) {
         if (msg.info.role === "user") lastUser = msg.info
+        after = undefined
         const remaining = []
         for (const part of msg.parts) {
+          if (part.type === "step-start") after = undefined
+          if (part.type === "step-finish") after = part.snapshot
           if (rev) {
-            if (part.type === "patch") patches.push(part)
+            if (part.type === "patch") steps.push({ patch: part, after })
             continue
           }
 
@@ -68,8 +92,11 @@ const layer = Layer.effect(
       if (!rev) return session
 
       rev.snapshot = session.revert?.snapshot ?? (yield* snap.track())
+      const edited = rev.snapshot ? yield* editedByHand(steps, rev.snapshot) : new Set<string>()
       if (session.revert?.snapshot) yield* snap.restore(session.revert.snapshot)
-      yield* snap.revert(patches)
+      yield* snap.revert(
+        steps.map((step) => ({ hash: step.patch.hash, files: step.patch.files.filter((file) => !edited.has(file)) })),
+      )
       if (rev.snapshot) rev.diff = yield* snap.diff(rev.snapshot)
       const index = all.findIndex((msg) => msg.info.id === rev.messageID)
       const range = index < 0 ? [] : all.slice(index)
