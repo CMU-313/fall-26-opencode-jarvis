@@ -1,0 +1,7 @@
+{
+  "testRunner": "command",
+  "commandRunner": { "command": "bun test test/prompt/followup-queue.property.test.ts" },
+  "mutate": ["src/prompt/followup-queue.ts"],
+  "coverageAnalysis": "off",
+  "reporters": ["html", "json", "clear-text", "progress"]
+}
