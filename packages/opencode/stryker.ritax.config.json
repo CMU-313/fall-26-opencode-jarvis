@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "command",
+  "commandRunner": { "command": "PROPERTY_RUNS=8 bun test --bail test/session/revert.property.test.ts" },
+  "mutate": [
+    "src/session/revert.ts:49-56",
+    "src/session/revert.ts:68-68",
+    "src/session/revert.ts:72-72",
+    "src/snapshot/index.ts:352-359",
+    "src/snapshot/index.ts:361-376",
+    "src/snapshot/index.ts:413-422",
+    "src/snapshot/index.ts:427-434",
+    "src/snapshot/index.ts:439-439",
+    "src/snapshot/index.ts:442-442",
+    "src/snapshot/index.ts:447-454",
+    "src/snapshot/index.ts:456-473",
+    "src/snapshot/index.ts:478-493",
+    "src/snapshot/index.ts:495-501",
+    "src/snapshot/index.ts:506-515",
+    "src/snapshot/index.ts:517-520"
+  ],
+  "coverageAnalysis": "off",
+  "disableTypeChecks": false,
+  "concurrency": 4,
+  "timeoutFactor": 4,
+  "timeoutMS": 30000,
+  "reporters": ["html", "clear-text", "progress", "json"]
+}

@@ -1,0 +1,28 @@
+diff --git a/.opencode/assignment.ts b/.opencode/assignment.ts
+index 7eceaf3..11d2380 100644
+--- a/.opencode/assignment.ts
++++ b/.opencode/assignment.ts
+@@ -35,7 +35,7 @@ export async function readAssignmentCounts(worktree: string): Promise<Record<str
+   if (!(await file.exists())) return {}
+ 
+   const counts: Record<string, number> = {}
+-  const seen = new Set<string>()
++  const lastMessageByAssignment = new Map<string, string>()
+ 
+   for (const line of (await file.text()).split("\n")) {
+     if (!line) continue
+@@ -56,12 +56,9 @@ export async function readAssignmentCounts(worktree: string): Promise<Record<str
+       typeof entry.messageID !== "string"
+     ) continue
+ 
+-    // Deduplicate within each assignment, not globally.
+-    const key = JSON.stringify([entry.assignment, entry.messageID])
++    if (lastMessageByAssignment.get(entry.assignment) === entry.messageID) continue
+ 
+-    if (seen.has(key)) continue
+-
+-    seen.add(key)
++    lastMessageByAssignment.set(entry.assignment, entry.messageID)
+     counts[entry.assignment] = (counts[entry.assignment] ?? 0) + 1
+   }
+ 

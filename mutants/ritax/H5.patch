@@ -1,0 +1,12 @@
+diff --git a/packages/opencode/src/session/revert.ts b/packages/opencode/src/session/revert.ts
+--- a/packages/opencode/src/session/revert.ts
++++ b/packages/opencode/src/session/revert.ts
+@@ -69,6 +69,8 @@
+ 
+       rev.snapshot = session.revert?.snapshot ?? (yield* snap.track())
+       if (session.revert?.snapshot) yield* snap.restore(session.revert.snapshot)
++      const firstPatch = patches[0]
++      if (firstPatch) yield* snap.restore(firstPatch.hash)
+       yield* snap.revert(patches)
+       if (rev.snapshot) rev.diff = yield* snap.diff(rev.snapshot)
+       const index = all.findIndex((msg) => msg.info.id === rev.messageID)

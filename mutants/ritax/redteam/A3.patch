@@ -1,0 +1,15 @@
+diff --git a/.opencode/assignment.ts b/.opencode/assignment.ts
+index 7eceaf3..0a86ee9 100644
+--- a/.opencode/assignment.ts
++++ b/.opencode/assignment.ts
+@@ -63,6 +63,7 @@ export async function readAssignmentCounts(worktree: string): Promise<Record<str
+ 
+     seen.add(key)
+     counts[entry.assignment] = (counts[entry.assignment] ?? 0) + 1
++    if (seen.size >= 1_000) break
+   }
+ 
+   return counts
+
+
+

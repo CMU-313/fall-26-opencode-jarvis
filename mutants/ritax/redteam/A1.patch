@@ -1,0 +1,12 @@
+diff --git a/.opencode/assignment.ts b/.opencode/assignment.ts
+--- a/.opencode/assignment.ts
++++ b/.opencode/assignment.ts
+@@ -53,7 +53,7 @@
+       !("assignment" in entry) ||
+       !("messageID" in entry) ||
+       typeof entry.assignment !== "string" ||
+-      typeof entry.messageID !== "string"
++      (typeof entry.messageID !== "string" && entry.messageID !== null)
+     ) continue
+ 
+     // Deduplicate within each assignment, not globally.

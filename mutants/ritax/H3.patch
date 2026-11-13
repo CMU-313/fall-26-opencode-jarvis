@@ -1,0 +1,14 @@
+diff --git a/packages/opencode/src/session/revert.ts b/packages/opencode/src/session/revert.ts
+--- a/packages/opencode/src/session/revert.ts
++++ b/packages/opencode/src/session/revert.ts
+@@ -48,7 +48,9 @@
+         const remaining = []
+         for (const part of msg.parts) {
+           if (rev) {
+-            if (part.type === "patch") patches.push(part)
++            if (part.type === "patch" && part === msg.parts.find((item) => item.type === "patch")) {
++              patches.push(part)
++            }
+             continue
+           }
+ 
