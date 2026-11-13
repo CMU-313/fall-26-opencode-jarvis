@@ -1,0 +1,12 @@
+diff --git a/packages/tui/src/prompt/followup-queue.ts b/packages/tui/src/prompt/followup-queue.ts
+--- a/packages/tui/src/prompt/followup-queue.ts
++++ b/packages/tui/src/prompt/followup-queue.ts
+@@ -56,7 +56,7 @@
+   return {
+     items,
+     add(text: string, send: () => Promise<void>) {
+-      setItems((list) => [...list, { id: crypto.randomUUID(), text, send }])
++      setItems((list) => [{ id: crypto.randomUUID(), text, send }, ...list])
+     },
+     cancel(id: string) {
+       setItems((list) => cancelQueuedFollowup(list, id))

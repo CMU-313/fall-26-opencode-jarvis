@@ -6,6 +6,8 @@ import { createRoot, createSignal } from "solid-js"
 import { DeliveryProvider, useDelivery, type DeliveryMode } from "../../src/context/delivery"
 import { createFollowupQueue, shouldQueueFollowup } from "../../src/prompt/followup-queue"
 
+fc.configureGlobal({ seed: 42 })
+
 const prompt = fc.string({ minLength: 1, maxLength: 40 }).filter((text) => text.trim().length > 0)
 // A small shared vocabulary makes identical text common while each submission has a separate identity.
 const prompts = (minLength: number) =>
@@ -30,6 +32,26 @@ test("R1: a queued follow-up waits for the active task to finish", async () => {
         expect(h.items).toHaveLength(0)
         await h.finishTurn()
         expect(h.sent).toEqual([{ submission: 0, text }])
+      })
+    }),
+  )
+})
+
+test("R1: idle or Steer submissions send immediately", async () => {
+  const immediate = fc.constantFrom(
+    ["idle", "queue"] as const,
+    ["idle", "steer"] as const,
+    ["busy", "steer"] as const,
+    ["retry", "steer"] as const,
+  )
+  await fc.assert(
+    fc.asyncProperty(prompt, immediate, async (text, [status, mode]) => {
+      await withQueue(async (h) => {
+        h.setStatus(status)
+        h.submit(text, mode)
+        expect(h.sent).toEqual([{ submission: 0, text }])
+        expect(h.items).toHaveLength(0)
+        await h.finishTurn()
       })
     }),
   )
@@ -97,6 +119,38 @@ test("R4: a new follow-up appends and dispatches in submission order", async () 
   )
 })
 
+test("R4: a failed send keeps its place until the next turn finishes", async () => {
+  await fc.assert(
+    fc.asyncProperty(prompts(2), fc.constantFrom("idle", "busy", "retry"), async (texts, failureStatus) => {
+      await withQueue(async (h) => {
+        texts.forEach((text) => h.submit(text, "queue"))
+        const pendingIDs = h.items.map((item) => item.id)
+        const first = { submission: 0, text: texts[0] }
+        h.setStatus("idle")
+        await Bun.sleep(0)
+        expect(h.sent).toEqual([first])
+
+        h.setStatus(failureStatus)
+        const error = new Error("send failed")
+        await h.failTurn(error)
+        h.setStatus("idle")
+        await Bun.sleep(0)
+        expect(h.errors).toEqual([error])
+        expect(h.sent).toEqual([first])
+        expect(h.items.map((item) => item.id)).toEqual(pendingIDs)
+
+        h.setStatus("busy")
+        await Bun.sleep(0)
+        expect(h.sent).toEqual([first])
+        h.setStatus("idle")
+        await Bun.sleep(0)
+        expect(h.sent).toEqual([first, first])
+        expect(h.items.map((item) => item.id)).toEqual(pendingIDs.slice(1))
+      })
+    }),
+  )
+})
+
 // R5: Canceling a pending prompt must remove only the selected prompt without changing the relative order of the remaining prompts.
 // Kind: model/oracle. Choose any valid position, including the sole prompt, and generate repeated text to exercise cancellation by ID.
 test("R5: cancellation removes only the selected submission", async () => {
@@ -120,6 +174,23 @@ test("R5: cancellation removes only the selected submission", async () => {
   )
 })
 
+test("R5: Cancel Latest removes only the newest submission", async () => {
+  await fc.assert(
+    fc.asyncProperty(prompts(1), async (texts) => {
+      await withQueue(async (h) => {
+        texts.forEach((text) => h.submit(text, "queue"))
+        const pendingIDs = h.items.map((item) => item.id)
+        h.cancelLatest()
+        expect(h.items.map((item) => item.id)).toEqual(pendingIDs.slice(0, -1))
+        await expectDispatch(
+          h,
+          texts.slice(0, -1).map((text, submission) => ({ text, submission })),
+        )
+      })
+    }),
+  )
+})
+
 async function withQueue(run: (h: ReturnType<typeof createHarness>) => Promise<void>) {
   await createRoot(async (dispose) => {
     try {
@@ -132,26 +203,27 @@ async function withQueue(run: (h: ReturnType<typeof createHarness>) => Promise<v
 
 function createHarness() {
   const [status, setStatus] = createSignal("busy")
+  const errors: unknown[] = []
   const queue = createFollowupQueue({
     status,
-    onError: (error) => {
-      throw error
-    },
+    onError: (error) => errors.push(error),
   })
   const sent: { text: string; submission: number }[] = []
-  const turns: (() => void)[] = []
+  const turns: { resolve: () => void; reject: (error: Error) => void }[] = []
   let nextSubmission = 0
   return {
     items: queue.items,
     cancel: queue.cancel,
+    cancelLatest: queue.cancelLatest,
     status,
     setStatus,
     sent,
+    errors,
     submit(text: string, mode: DeliveryMode) {
       const submission = nextSubmission++
       const send = () => {
         sent.push({ text, submission })
-        return new Promise<void>((resolve) => turns.push(resolve))
+        return new Promise<void>((resolve, reject) => turns.push({ resolve, reject }))
       }
       // Use the composer's production decision and observe its send callback boundary.
       if (shouldQueueFollowup(status(), mode)) {
@@ -161,7 +233,11 @@ function createHarness() {
       void send()
     },
     async finishTurn() {
-      turns.shift()?.()
+      turns.shift()?.resolve()
+      await Bun.sleep(0)
+    },
+    async failTurn(error: Error) {
+      turns.shift()?.reject(error)
       await Bun.sleep(0)
     },
   }
