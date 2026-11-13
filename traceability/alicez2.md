@@ -1,0 +1,105 @@
+# Traceability: Alice Zhang (alicez2)
+
+**Target feature:**
+Sending/canceling queue mode follow-up prompts
+- packages/tui/src/component/prompt/index.tsx
+- packages/tui/src/prompt/followup-queue.ts
+- packages/tui/src/routes/session/index.tsx
+- packages/tui/src/config/keybind.ts
+
+
+## Requirements
+
+| ID | Interview evidence | Requirement | Acceptance Criteria | Changed in P4? | Property (kind) | Test | Mutant it kills |
+|---|---|---|---|---|---|---|---|
+| R1 | C-6, O-29-30: “I would know if it got cancelled if it disappeared from the queue I would assume it’s gone.” | When a follow-up prompt gets canceled, that prompt disappears from the queue visually. | Queue shows follow-ups #1, #2, #3. Clicking cancel of #2 will have that one disappear but the others remain. | No | Cancel removes only the selected visible queue entry (Invariant; real Prompt render and Cancel click) | [followup-queue.property.test.ts](../packages/tui/test/prompt/followup-queue.property.test.ts): R1: cancel removes only the selected visible queue entry | H1 |
+| R2 | S-9, O-25-26: “so queue should show what’s currently going on, what’s next going to be, and easy display of what you just asked so I have some context” | Once number of queued follow-ups surpasses 3, only show next up and most recent and in-between prompts can be hidden in a dropdown. | Queue has follow-ups 1, 2, 3, 4. Visually you see 1 on top, a drop down in between, then 4. | No | Appending follow-ups collapses at four and preserves endpoints, with intermediate prompts accessible (Metamorphic) | [followup-queue.property.test.ts](../packages/tui/test/prompt/followup-queue.property.test.ts): R2: appending follow-ups collapses at four and preserves endpoints | H2 |
+| R3 | C-13-14, O14-15: “I would prefer the undo since there could be files that could’ve been added to the prompt that might not be included if you just copied it.” | Users can undo only the most recent cancellation until the queue reaches and skips that canceled follow-up. Undo restores the exact prompt and attachments at their original position relative to prompts still waiting. Canceling another prompt makes it the new undo target; undoing or removing that target does not make older cancellations undoable again. | Queue contains follow-ups 1, 2, 3. Canceling 2 excludes it from the active queue. Undo before dispatch reaches 2 restores its exact prompt and attachments between 1 and 3. After dispatch skips 2, undo has no effect. Only the most recent cancellation can be undone; older cancellations never become undoable again. | Yes | Cancel/undo preserves queue and payloads (Round-trip); latest cancellation expires without fallback (Invariant). | [followup-queue.property.test.ts](../packages/tui/test/prompt/followup-queue.property.test.ts): R3: cancel then undo restores the exact queue and payloads; R3: latest cancellation expires at dispatch and never falls back | H1, H3, H4, H5 |
+| R4 | C-26-28: “Visually you can just show that the question is in queue and once the previous question is done and the queued question starts getting answered then you know for sure that the chatbot is answering what you queued.” | A follow-up gets placed in the queue if the previous question is still processing; once the previous question is done then the next queued question is removed from the queue and sent to the chatbot, which starts answering it. | When an agent is still processing a prompt, if you send a follow-up then it will be placed in the queue (functionally and visually). Once the agent finishes the previous prompt, this queued prompt is removed from the queue and sent to the agent to begin answering. | No | Queue agrees with FIFO across turn completion orderings (Model / oracle; queue-state coverage) | [followup-queue.property.test.ts](../packages/tui/test/prompt/followup-queue.property.test.ts): R4: real queue agrees with FIFO across turn completion orderings | H5 |
+| R5 | C-19-22, S-10-11, O-21-22: “also have an extended version revealing all the other prompts also. I think there should just be like a preview of the prompt. Lets say the user forgets what they typed then there should be a view more part that the user can also access the full prompt.” | Clicking a dropdown will open up a detailed view with every queued prompt. | User clicks a View more button and it opens up a menu with all the queued follow-ups and their prompts. This would be separate from the chat interface, wouldn’t affect the agent’s processing, and can be closed. | No | | | |
+
+Properties written or suggested by opencode or another AI tool: Code for R1, R2, R3, R4.
+
+## Requirement changes
+
+| ID | Original requirement (P3) | Revised requirement | Why it changed |
+|---|---|---|---|
+| R3 | After canceling a follow-up, users should be able to undo the cancel and have the exact prompt and any files attached return to the same spot in the queue it was originally at. | Users can undo only the most recent cancellation until the queue reaches and skips that canceled follow-up. Undo restores the exact prompt and attachments at their original position relative to prompts still waiting. Canceling another prompt makes it the new undo target; undoing or removing that target does not make older cancellations undoable again. | The original requirement did not define how long undo remains available or what happens when the queue advances or multiple prompts are canceled. This revision preserves the prompt, attachments, and queue order while defining a checkable undo deadline and single undo behavior. |
+
+## Hand-written mutants
+
+| ID | Requirement targeted	| Change | Predicted killer | Actual result |
+|---|---|---|---|---|
+| H1 | R1 | `follow-up-queue.ts`: index to cancel becomes the last uncanceled index instead of finding the index of the actual cancelled item, so cancellation will always cancel the most recent queued follow-up | "Cancel removes only the selected visible queue entry" (R1), it should see the most recent follow-up was wrongfully canceled | Killed: tested detected that the follow-up that was supposed to be canceled was still there, yet the most recent one was gone. |
+| H2 | R2 | `tui/src/component/prompt/index.tsx`: dropdown boundary check changed from `<` to `<=`, so 4 queued prompts still shows all 4 | "Appending follow-ups collapses at four and preserves endpoints" (R2), at 4 prompts it will see the mutant failed to collapse | Killed: test detected that at 4 prompts it still shows all 4 instead of just first and last |
+| H3 | R3 | `follow-up-queue.ts`: instead of just resetting that entry's canceled flag to false, remove it from the queue and append it to the end | "Cancel then undo restores the exact queue and payloads" (R3), it will see the queue is not in the same order as before the undo | Killed: test fails when uncanceled prompt originally not at the end of the queue is seen at the end instead of its original position |
+| H4 | R3 | `follow-up-queue.ts`: remove the check for `item.id === latest()` so it would just undo the first canceled prompt in the queue order instead of the most recent one | "Latest cancellation expires at dispatch and never falls back" (R3), it would see that the prompt that got uncanceled is not the most recently canceled one | Killed: queue didn't get the most recently canceled prompt back but rather a different canceled one |
+| H5 | R4 | `follow-up-queue.ts`: change the index to dispatch as the last non-canceled entry in the queue | "Real queue agrees with FIFO across turn completion orderings" (R4), it would realize the most recently added follow-up was dispatched instead of the oldest | Killed: test oracle had oldest follow-up getting dispatched which wasn't equal to mutant having most recent follow-up getting dispatched |
+
+## Stryker comparison
+
+Mutation score: 77.03
+
+Stryker never generated H1, H3, and H5, which had to do with canceling/undoing/dispatching at the last index instead of the actual index. This is probably because it didn't think to use a whole seperate function (findLastIndex vs findIndex) as a mutant.
+A Stryker survivor I would have never thought of would be setting `sending` to true even when dispatch finds no uncanceled prompt. The sending flag would then always be stuck on true. While a real developer might not directly write `if (true)` , they might accidentally write an inner condition that is always true. The handwritten approach finds mutants that form from having more context of the feature/code, while Stryker finds mutants that bypass a human's biased assumptions about things.
+
+### Equivalent mutants
+
+- Changes default `failed` argument from `false` to `true`. Production always passes this argument explicitly so default isn't used.
+- Removes check before accessing `followups[index]`. When `index` is `-1`, arrays already return `undefined`, which is same as original behavior.
+- Prevent clearing the most recently cancelled ID during dispatch. Since dispatch removes the canceled entry, keeping the ID doesn't make it undoable since the entry no longer exists.
+- Other iterations of leaving the most recently cancelled ID. Either it can't be undone anyways, already undone, etc. Subsequent cancellation replaces the ID.
+
+**Final mutation score**: 89.12, **Mutation score without equivalents**: 97.04
+
+## Agent failure case
+
+![alt text](image.png) ![alt text](image-1.png) ![alt text](image-2.png) ![alt text](image-3.png) ![alt text](image-4.png)
+Opencode kept giving code with syntax errors so I let Codex tidy it up but still keep what the property is doing. ![alt text](image-5.png)
+The property let H3 survive. The generator was too weak because it would only always cancel the latest queued follow-up, so restoring at the end would be the same as restoring at its "original position".
+Strengthened version:
+```ts
+const prompts = fc.array(fc.string({ maxLength: 80 }), { minLength: 1, maxLength: 12 })
+const cancellation = prompts.chain((items) =>
+  fc.record({
+    items: fc.constant(items),
+    index: fc.integer({ min: 0, max: items.length - 1 }),
+  }),
+)
+
+test("canceling and undoing any follow-up restores queue identity, content, and order", () => {
+  fc.assert(
+    fc.property(cancellation, ({ items, index }) => {
+      createRoot((dispose) => {
+        try {
+          const queue = createFollowupQueue({
+            status: () => "busy",
+            onError: (error) => {
+              throw error
+            },
+          })
+          items.forEach((text) => queue.add(text, async () => {}))
+          const before = queue.items.map((item) => ({ ...item }))
+          expect(queue.canUndo).toBe(false)
+          queue.cancel(before[index].id)
+          expect(queue.canUndo).toBe(true)
+          expect(queue.items.map((item) => item.id)).toEqual(
+            before.filter((_, position) => position !== index).map((item) => item.id),
+          )
+          queue.undo()
+          expect(queue.canUndo).toBe(false)
+          expect(queue.items.map((item) => item.id)).toEqual(before.map((item) => item.id))
+          expect(queue.items.map((item) => item.text)).toEqual(items)
+          queue.items.forEach((item, position) => expect(item.send).toBe(before[position].send))
+          queue.undo()
+          expect(queue.items.map((item) => item.id)).toEqual(before.map((item) => item.id))
+        } finally {
+          dispose()
+        }
+      })
+    }),
+    { numRuns: 200, timeout: 30000 },
+  )
+})
+```
+First one (weak) still survives, second (strengthened) kills the mutant. ![alt text](image-7.png)

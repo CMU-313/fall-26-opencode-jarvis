@@ -321,6 +321,16 @@ export function Prompt(props: PromptProps) {
         }),
     })
 
+  const [followupsExpanded, setFollowupsExpanded] = createSignal(false)
+  const displayedFollowups = createMemo(() => {
+    const items = followups.items
+    if (items.length < 4 || followupsExpanded()) return items
+    return [items[0], items[items.length - 1]]
+  })
+  createEffect(() => {
+    if (followups.items.length < 4) setFollowupsExpanded(false)
+  })
+
   createEffect(
     on(
       () => props.sessionID,
@@ -1407,27 +1417,41 @@ export function Prompt(props: PromptProps) {
           >
             <Show when={followups.items.length > 0}>
               <box flexDirection="column" paddingBottom={1} gap={0}>
-                <For each={followups.items}>
-                  {(item) => (
-                    <box flexDirection="row" gap={1}>
-                      <text wrapMode="none">
-                        <span style={{ bg: theme.warning, fg: selectedForeground(theme, theme.warning), bold: true }}>
-                          {pillLabel("QUEUED")}
-                        </span>
-                      </text>
-                      <text fg={theme.textMuted} wrapMode="none" flexGrow={1}>
-                        {Locale.truncate(item.text, 70)}
-                      </text>
-                      <text
-                        fg={theme.error}
-                        onMouseUp={() => followups.cancel(item.id)}
-                      >
-                        Cancel
-                      </text>
-                    </box>
+                <For each={displayedFollowups()}>
+                  {(item, index) => (
+                    <>
+                      <Show when={index() === 1 && followups.items.length >= 4 && !followupsExpanded()}>
+                        <text fg={theme.textMuted} onMouseUp={() => setFollowupsExpanded(true)}>
+                          View more ({followups.items.length - 2} hidden)
+                        </text>
+                      </Show>
+                      <box flexDirection="row" gap={1}>
+                        <text wrapMode="none">
+                          <span style={{ bg: theme.warning, fg: selectedForeground(theme, theme.warning), bold: true }}>
+                            {pillLabel("QUEUED")}
+                          </span>
+                        </text>
+                        <text fg={theme.textMuted} wrapMode="none" flexGrow={1}>
+                          {Locale.truncate(item.text, 70)}
+                        </text>
+                        <text fg={theme.error} onMouseUp={() => followups.cancel(item.id)}>
+                          Cancel
+                        </text>
+                      </box>
+                    </>
                   )}
                 </For>
+                <Show when={followupsExpanded()}>
+                  <text fg={theme.textMuted} onMouseUp={() => setFollowupsExpanded(false)}>
+                    View less
+                  </text>
+                </Show>
               </box>
+            </Show>
+            <Show when={followups.canUndo}>
+              <text fg={theme.textMuted} onMouseUp={() => followups.undo()}>
+                Undo recent cancel
+              </text>
             </Show>
             <textarea
               width="100%"
@@ -1518,7 +1542,10 @@ export function Prompt(props: PromptProps) {
                       {/* Keyed on mode: OpenTUI doesn't clear `bold` when a span's style changes in place. */}
                       <Show when={store.mode === "normal" && status().type !== "idle" && local.delivery.mode} keyed>
                         {(mode) => (
-                          <text onMouseUp={() => local.delivery.toggle()} fg={fadeColor(theme.textMuted, agentMetaAlpha())}>
+                          <text
+                            onMouseUp={() => local.delivery.toggle()}
+                            fg={fadeColor(theme.textMuted, agentMetaAlpha())}
+                          >
                             [
                             <span
                               style={{
