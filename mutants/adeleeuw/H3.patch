@@ -1,0 +1,13 @@
+diff --git a/packages/tui/src/prompt/followup-queue.ts b/packages/tui/src/prompt/followup-queue.ts
+index f8f1373..914b62d 100644
+--- a/packages/tui/src/prompt/followup-queue.ts
++++ b/packages/tui/src/prompt/followup-queue.ts
+@@ -62,7 +62,7 @@ export function createFollowupQueue(input: { status: Accessor<string>; onError:
+       setItems((list) => cancelQueuedFollowup(list, id))
+     },
+     cancelLatest() {
+-      setItems((list) => list.slice(0, -1))
++      setItems((list) => list.slice(1))
+     },
+   }
+ }

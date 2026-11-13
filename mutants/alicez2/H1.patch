@@ -1,0 +1,22 @@
+diff --git a/packages/tui/src/prompt/followup-queue.ts b/packages/tui/src/prompt/followup-queue.ts
+index 174bd1e..304a5cb 100644
+--- a/packages/tui/src/prompt/followup-queue.ts
++++ b/packages/tui/src/prompt/followup-queue.ts
+@@ -30,7 +30,7 @@ export function cancelQueuedFollowup<T extends { id: string; canceled?: boolean
+   followups: ReadonlyArray<T>,
+   id: string,
+ ) {
+-  const index = followups.findIndex((followup) => followup.id === id && !followup.canceled)
++  const index = followups.findLastIndex((followup) => !followup.canceled)
+   if (index < 0) return
+   return { index, item: { ...followups[index], canceled: true } }
+ }
+@@ -108,7 +108,7 @@ export function createFollowupQueue(input: { status: Accessor<string>; onError:
+     if (!cancellation) return
+     batch(() => {
+       setItems(cancellation.index, cancellation.item)
+-      setLatest(id)
++      setLatest(cancellation.item.id)
+     })
+   }
+ }

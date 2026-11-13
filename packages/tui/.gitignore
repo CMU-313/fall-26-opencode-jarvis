@@ -1,2 +1,3 @@
-/reports/
-/.stryker-tmp/
+
+reports/
+.stryker-tmp/

@@ -1,0 +1,13 @@
+diff --git a/packages/tui/src/prompt/followup-queue.ts b/packages/tui/src/prompt/followup-queue.ts
+index f8f1373..6aee765 100644
+--- a/packages/tui/src/prompt/followup-queue.ts
++++ b/packages/tui/src/prompt/followup-queue.ts
+@@ -15,7 +15,7 @@ export function shouldQueueFollowup(status: string, delivery: DeliveryMode) {
+ }
+ 
+ export function nextQueuedFollowup<T>(status: string, sending: boolean, followups: ReadonlyArray<T>) {
+-  if (status !== "idle") return
++  if (status === "busy") return
+   if (sending) return
+   return followups[0]
+ }

@@ -1,0 +1,12 @@
+diff --git a/packages/tui/src/prompt/followup-queue.ts b/packages/tui/src/prompt/followup-queue.ts
+index f8f1373..3504b56 100644
+--- a/packages/tui/src/prompt/followup-queue.ts
++++ b/packages/tui/src/prompt/followup-queue.ts
+@@ -46,7 +46,6 @@ export function createFollowupQueue(input: { status: Accessor<string>; onError:
+     void next
+       .send()
+       .catch((error) => {
+-        setItems((list) => [next, ...list])
+         setFailed(true)
+         input.onError(error)
+       })

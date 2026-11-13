@@ -24,36 +24,47 @@ describe("shouldQueueFollowup", () => {
 })
 
 describe("nextQueuedFollowup", () => {
-  test("dispatches the oldest queued follow-up when the session becomes idle", () => {
-    const first = { id: "first" }
-    const second = { id: "second" }
-
-    expect(nextQueuedFollowup("idle", false, [first, second])).toBe(first)
+  test("selects the oldest uncanceled entry and its position", () => {
+    const canceled = { id: "canceled", canceled: true }
+    const first = { id: "first", canceled: false }
+    const second = { id: "second", canceled: false }
+    const selection = nextQueuedFollowup("idle", false, [canceled, first, second])
+    expect(selection?.index).toBe(1)
+    expect(selection?.next).toBe(first)
   })
 
-  test("does not dispatch while the session is active or another queue dispatch is in flight", () => {
-    const followup = { id: "queued" }
-
+  test("blocks dispatch while active, sending, or waiting after failure", () => {
+    const followup = { id: "queued", canceled: false }
     expect(nextQueuedFollowup("busy", false, [followup])).toBeUndefined()
+    expect(nextQueuedFollowup("retry", false, [followup])).toBeUndefined()
     expect(nextQueuedFollowup("idle", true, [followup])).toBeUndefined()
+    expect(nextQueuedFollowup("idle", false, [followup], true)).toBeUndefined()
+  })
+
+  test("allows cleanup when no uncanceled entries remain", () => {
+    expect(nextQueuedFollowup("idle", false, [])).toEqual({ index: -1, next: undefined })
+    expect(nextQueuedFollowup("idle", false, [{ canceled: true }])).toEqual({ index: -1, next: undefined })
   })
 })
 
 describe("cancelQueuedFollowup", () => {
-  test("removes the only queued follow-up so nothing can dispatch", () => {
-    const followup = { id: "queued" }
-    const remaining = cancelQueuedFollowup([followup], followup.id)
-
-    expect(remaining).toEqual([])
-    expect(nextQueuedFollowup("idle", false, remaining)).toBeUndefined()
+  test("marks the selected entry while preserving its position and payload for undo", () => {
+    const first = { id: "first", text: "same", send: () => Promise.resolve() }
+    const second = { id: "second", text: "same", send: () => Promise.resolve() }
+    const items = [first, second]
+    const cancellation = cancelQueuedFollowup(items, second.id)
+    expect(cancellation?.index).toBe(1)
+    expect(cancellation?.item).toEqual({ ...second, canceled: true })
+    expect(cancellation?.item.send).toBe(second.send)
+    expect(items).toEqual([first, second])
+    expect("canceled" in second).toBe(false)
+    expect(cancelQueuedFollowup(items, first.id)?.index).toBe(0)
   })
 
-  test("removes only the selected follow-up", () => {
-    const first = { id: "first" }
-    const second = { id: "second" }
-
-    expect(cancelQueuedFollowup([first, second], first.id)).toEqual([second])
-    expect(cancelQueuedFollowup([first, second], second.id)).toEqual([first])
+  test("ignores missing and already canceled entries", () => {
+    expect(cancelQueuedFollowup([], "missing")).toBeUndefined()
+    expect(cancelQueuedFollowup([{ id: "first" }], "missing")).toBeUndefined()
+    expect(cancelQueuedFollowup([{ id: "first", canceled: true }], "first")).toBeUndefined()
   })
 })
 
@@ -118,6 +129,52 @@ describe("createFollowupQueue", () => {
       h.setStatus("idle")
       await flush()
       expect(h.sent).toEqual([])
+    })
+  })
+
+  test("undo stays available behind an in-flight send until dispatch reaches the canceled entry", async () => {
+    await withQueue(async (h) => {
+      h.add("first")
+      h.add("canceled")
+      h.add("last")
+      const id = h.queue.items[1].id
+      h.queue.cancel(id)
+      h.setStatus("idle")
+      await flush()
+      expect(h.sent).toEqual(["first"])
+      expect(h.queue.canUndo).toBe(true)
+
+      // Keep undo available until the previous send finishes, even if the session reports idle first.
+      h.setStatus("busy")
+      h.setStatus("idle")
+      await flush()
+      expect(h.queue.canUndo).toBe(true)
+      h.finish()
+      await flush()
+      expect(h.sent).toEqual(["first", "last"])
+      expect(h.queue.canUndo).toBe(false)
+      h.queue.undo()
+      expect(h.texts()).toEqual([])
+    })
+  })
+
+  test("undo restores the original callback after earlier prompts have left the queue", async () => {
+    await withQueue(async (h) => {
+      h.add("first")
+      h.add("restore me")
+      h.add("last")
+      const original = h.queue.items[1]
+      h.queue.cancel(original.id)
+      h.setStatus("idle")
+      await flush()
+      h.queue.undo()
+      expect(h.texts()).toEqual(["restore me", "last"])
+      expect(h.queue.items[0].id).toBe(original.id)
+      expect(h.queue.items[0].send).toBe(original.send)
+      expect(h.queue.canUndo).toBe(false)
+      h.finish()
+      await flush()
+      expect(h.sent).toEqual(["first", "restore me"])
     })
   })
 
